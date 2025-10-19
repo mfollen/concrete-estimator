@@ -5,6 +5,8 @@ import { supabase } from "../../lib/supabaseClient";
 type Org = { id: string; name: string };
 
 export default function Settings() {
+  const [demoStatus, setDemoStatus] = useState<string | null>(null);
+  const [demoBusy, setDemoBusy] = useState(false);
   const [loading, setLoading] = useState(true);
   const [errorText, setErrorText] = useState<string | null>(null);
   const [org, setOrg] = useState<Org | null>(null);
@@ -105,10 +107,13 @@ export default function Settings() {
     <div>
       <h1 className="text-xl" style={{ marginBottom: 12 }}>Settings</h1>
 
-      <div className="card" style={{ marginBottom: 16 }}>
-        <p><strong>Step 1:</strong> Click to create a demo project.</p>
-        <button className="button" onClick={() => initDemoProject(org!.id)}>Initialize Demo Data</button>
-      </div>
+<div className="card" style={{ marginBottom: 16 }}>
+  <p><strong>Step 1:</strong> Click to create a demo project.</p>
+  <button className="button" disabled={demoBusy} onClick={() => initDemoProject(org!.id)}>
+    {demoBusy ? "Working…" : "Initialize Demo Data"}
+  </button>
+  {demoStatus && <p style={{marginTop:8}}>{demoStatus}</p>}
+</div>
 
       <div className="card" style={{ marginBottom: 16 }}>
         <h2 className="text-lg">Branding</h2>
@@ -233,34 +238,92 @@ async function ensureDefaults(orgId: string) {
 }
 
 async function initDemoProject(orgId: string) {
+  setDemoStatus(null);
+  setDemoBusy(true);
   try {
     const { data: me, error: meErr } = await supabase.auth.getUser();
     if (meErr) throw meErr;
     const userId = me.user?.id;
     if (!userId) throw new Error("No signed-in user.");
 
+    setDemoStatus("Creating project…");
     const { data: project, error: pErr } = await supabase
       .from("Project")
-      .insert({ orgId, name: "Warehouse Expansion", clientName: "BigCo", location: "Joliet, IL", createdBy: userId })
-      .select("*").single();
+      .insert({
+        orgId,
+        name: "Warehouse Expansion",
+        clientName: "BigCo",
+        location: "Joliet, IL",
+        createdBy: userId,
+      })
+      .select("*")
+      .single();
     if (pErr) throw pErr;
 
+    setDemoStatus("Creating estimate…");
     const { data: estimate, error: eErr } = await supabase
       .from("Estimate")
-      .insert({ projectId: project.id, title: "Base Bid", overheadPct: 10, createdBy: userId, mobilizationCount: 1 })
-      .select("*").single();
+      .insert({
+        projectId: project.id,
+        title: "Base Bid",
+        overheadPct: 10,
+        createdBy: userId,
+        mobilizationCount: 1,
+      })
+      .select("*")
+      .single();
     if (eErr) throw eErr;
 
+    setDemoStatus("Adding sample items…");
     const { error: iErr } = await supabase.from("EstimateItem").insert([
-      { estimateId: estimate.id, kind: "SLAB", description: '6" slab on grade', unit: "SF", quantity: 20000, unitCost: 5.25, markupPct: 20, contingencyPct: 5, durationHours: 160, isMaterial: true, isLabor: true, isEquipment: true },
-      { estimateId: estimate.id, kind: "FOOTING", description: 'Strip footing 24"x12"', unit: "LF", quantity: 600, unitCost: 18.5, markupPct: 15, contingencyPct: 5, durationHours: 80, isMaterial: true, isLabor: true },
-      { estimateId: estimate.id, kind: "WALL", description: '8" formed wall', unit: "SF", quantity: 3000, unitCost: 15.0, markupPct: 12, contingencyPct: 5, durationHours: 120, isMaterial: true, isLabor: true }
+      {
+        estimateId: estimate.id,
+        kind: "SLAB",
+        description: '6" slab on grade',
+        unit: "SF",
+        quantity: 20000,
+        unitCost: 5.25,
+        markupPct: 20,
+        contingencyPct: 5,
+        durationHours: 160,
+        isMaterial: true,
+        isLabor: true,
+        isEquipment: true,
+      },
+      {
+        estimateId: estimate.id,
+        kind: "FOOTING",
+        description: 'Strip footing 24"x12"',
+        unit: "LF",
+        quantity: 600,
+        unitCost: 18.5,
+        markupPct: 15,
+        contingencyPct: 5,
+        durationHours: 80,
+        isMaterial: true,
+        isLabor: true,
+      },
+      {
+        estimateId: estimate.id,
+        kind: "WALL",
+        description: '8" formed wall',
+        unit: "SF",
+        quantity: 3000,
+        unitCost: 15.0,
+        markupPct: 12,
+        contingencyPct: 5,
+        durationHours: 120,
+        isMaterial: true,
+        isLabor: true,
+      },
     ]);
     if (iErr) throw iErr;
 
-    alert("Demo project created! Go back to Home and create a snapshot.");
+    setDemoStatus("✅ Demo project created! Go to Home to see it.");
   } catch (err: any) {
     console.error("Init demo data failed:", err);
-    alert(`Initialize Demo Data failed: ${err?.message || String(err)}`);
+    setDemoStatus(`❌ Initialize Demo Data failed: ${err?.message || String(err)}`);
+  } finally {
+    setDemoBusy(false);
   }
 }
