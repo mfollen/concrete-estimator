@@ -3,161 +3,269 @@
 import { useEffect, useState } from "react";
 import { supabase } from "../lib/supabaseClient";
 
-export default function Home() {
-  const [emailSent, setEmailSent] = useState<string | null>(null);
-  const [sessionEmail, setSessionEmail] = useState<string | null>(null);
+/** Small helpers */
+function money(n: number) {
+  return `$${(Math.round((n ?? 0) * 100) / 100).toLocaleString()}`;
+}
+
+type Project = { id: string; name: string; orgId: string };
+
+export default function HomePage() {
+  const [email, setEmail] = useState("");
+  const [userId, setUserId] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [orgIds, setOrgIds] = useState<string[]>([]);
+  const [projects, setProjects] = useState<Project[]>([]);
+  const [busyProjectId, setBusyProjectId] = useState<string | null>(null);
+  const [msg, setMsg] = useState<string | null>(null);
 
   useEffect(() => {
-    supabase.auth.getSession().then(({ data }) => {
-      const email = data.session?.user?.email ?? null;
-      setSessionEmail(email);
-    });
+    (async () => {
+      const { data } = await supabase.auth.getUser();
+      const u = data.user;
+      if (u?.id) {
+        setUserId(u.id);
+        await ensureOrgsAndLoad(u.id);
+      }
+      setLoading(false);
+    })();
   }, []);
 
-  if (!sessionEmail) {
+  /** Send magic link */
+  async function sendMagicLink() {
+    setMsg(null);
+    const redirectTo = typeof window !== "undefined" ? window.location.origin : undefined;
+    const { error } = await supabase.auth.signInWithOtp({
+      email,
+      options: { emailRedirectTo: redirectTo },
+    });
+    if (error) setMsg(`Error: ${error.message}`);
+    else setMsg("Check your email for the magic link.");
+  }
+
+  /** Ensures at least one org and loads all projects for all orgs the user belongs to */
+  async function ensureOrgsAndLoad(uid: string) {
+    // memberships
+    let { data: mems, error: memErr } = await supabase
+      .from("Membership")
+      .select('"orgId"')
+      .eq('"userId"', uid);
+    if (memErr) throw memErr;
+
+    let orgs = (mems || []).map((m: any) => m.orgId as string);
+
+    // if none, create default org + membership
+    if (!orgs.length) {
+      const { data: newOrg, error: orgErr } = await supabase
+        .from("Org")
+        .insert({ name: "My Concrete Company" })
+        .select("id")
+        .single();
+      if (orgErr) throw orgErr;
+      const newOrgId = newOrg!.id as string;
+
+      const { error: memInsErr } = await supabase
+        .from("Membership")
+        .insert({ orgId: newOrgId, userId: uid, role: "OWNER" });
+      if (memInsErr) throw memInsErr;
+
+      orgs = [newOrgId];
+    }
+
+    setOrgIds(orgs);
+
+    // load projects across all orgs for this user
+    const { data: projs, error: pErr } = await supabase
+      .from("Project")
+      .select('id, name, "orgId"')
+      .in('"orgId"', orgs);
+    if (pErr) throw pErr;
+
+    setProjects((projs || []) as Project[]);
+  }
+
+  /** Create a snapshot for latest estimate on a project and open printable bid */
+  async function createSnapshot(project: Project) {
+    try {
+      setBusyProjectId(project.id);
+      setMsg(null);
+
+      // latest estimate
+      const { data: est, error: eErr } = await supabase
+        .from("Estimate")
+        .select('id, title, overheadPct, mobilizationCount, createdAt')
+        .eq('"projectId"', project.id)
+        .order("createdAt", { ascending: false })
+        .limit(1)
+        .single();
+      if (eErr) throw eErr;
+
+      // items
+      const { data: items, error: iErr } = await supabase
+        .from("EstimateItem")
+        .select(
+          'id, description, unit, quantity, unitCost, markupPct, contingencyPct, isMaterial, isLabor, isEquipment'
+        )
+        .eq('"estimateId"', est.id);
+      if (iErr) throw iErr;
+
+      // org-level settings/tax/tiers for THIS project org
+      const orgId = project.orgId;
+      const [{ data: S }, { data: T }, { data: MK }] = await Promise.all([
+        supabase.from("OrgSettings").select("*").eq('"orgId"', orgId).single(),
+        supabase.from("TaxScope").select("*").eq('"orgId"', orgId).single(),
+        supabase
+          .from("MarkupTier")
+          .select("*")
+          .eq('"orgId"', orgId)
+          .order("rank", { ascending: true }),
+      ]);
+
+      // normalize items
+      const normItems = (items || []).map((it: any) => {
+        const qty = Number(it.quantity || 0);
+        const unitCost = Number(it.unitCost || 0);
+        const lineTotal = qty * unitCost;
+        return {
+          id: it.id,
+          desc: it.description,
+          unit: it.unit,
+          qty,
+          unitCost,
+          isMaterial: !!it.isMaterial,
+          isLabor: !!it.isLabor,
+          isEquipment: !!it.isEquipment,
+          lineTotal,
+        };
+      });
+
+      const subTotal = normItems.reduce((s, i) => s + i.lineTotal, 0);
+
+      // markup via tiers (or fallback)
+      let markupPct = 0;
+      if (S?.useMarkupTiers && MK?.length) {
+        const amt = subTotal;
+        let matched = false;
+        for (const t of MK) {
+          const min = Number(t.minAmount || 0);
+          const max = t.maxAmount === null ? Infinity : Number(t.maxAmount);
+          if (amt >= min && amt < max) {
+            markupPct = Number(t.percent || 0);
+            matched = true;
+            break;
+          }
+        }
+        if (!matched && MK.length > 0) markupPct = Number(MK[MK.length - 1].percent || 0);
+      } else {
+        const mpctAvg =
+          (items || []).reduce((s: number, it: any) => s + Number(it.markupPct || 0), 0) /
+          Math.max(1, (items || []).length);
+        markupPct = isFinite(mpctAvg) ? mpctAvg : 0;
+      }
+      const markupValue = (subTotal * markupPct) / 100;
+
+      // contingency (after markup per your preference)
+      const contingencyPct = Number(S?.defaultContingency || 0);
+      const basePlusMarkup = subTotal + markupValue;
+      const contingencyValue = (basePlusMarkup * contingencyPct) / 100;
+
+      // tax by buckets
+      const taxableBase =
+        (T?.taxMaterials ? normItems.filter(i => i.isMaterial).reduce((s, i) => s + i.lineTotal, 0) : 0) +
+        (T?.taxLabor ? normItems.filter(i => i.isLabor).reduce((s, i) => s + i.lineTotal, 0) : 0) +
+        (T?.taxEquipment ? normItems.filter(i => i.isEquipment).reduce((s, i) => s + i.lineTotal, 0) : 0) +
+        (T?.taxMarkup ? markupValue : 0) +
+        (T?.taxContingency ? contingencyValue : 0);
+      const taxRate = Number(T?.rate || 0);
+      const taxValue = (taxableBase * taxRate) / 100;
+
+      const grandTotal = basePlusMarkup + contingencyValue + taxValue;
+
+      const snapshotData = {
+        items: normItems,
+        subTotal,
+        markupPct,
+        markupValue,
+        contingencyPct,
+        contingencyValue,
+        taxRate,
+        taxValue,
+        grandTotal,
+      };
+
+      // save snapshot
+      const { data: snap, error: sErr } = await supabase
+        .from("EstimateSnapshot")
+        .insert({ estimateId: est.id, version: 1, data: snapshotData })
+        .select("id")
+        .single();
+      if (sErr) throw sErr;
+
+      // open printable bid
+      window.location.href = `/b/${snap.id}`;
+    } catch (err: any) {
+      console.error("Create snapshot failed:", err);
+      alert(`Create snapshot failed: ${err?.message || String(err)}`);
+    } finally {
+      setBusyProjectId(null);
+    }
+  }
+
+  /** -------- Render -------- */
+  if (loading) return <div className="container">Loading…</div>;
+
+  if (!userId) {
     return (
-      <div>
-        <h1 className="text-xl" style={{marginBottom:12}}>Sign in to Concrete Estimator</h1>
-        <form className="card" onSubmit={async (e) => {
-          e.preventDefault();
-          const email = (e.currentTarget as any).email.value as string;
-          const { error } = await supabase.auth.signInWithOtp({ email, options: { emailRedirectTo: window.location.origin } });
-          if (error) alert(error.message);
-          else setEmailSent(email);
-        }}>
+      <div className="container" style={{ maxWidth: 420 }}>
+        <h1 className="title">Sign in to Concrete Estimator</h1>
+        <div className="card">
           <div className="field">
             <label>Email</label>
-            <input name="email" type="email" placeholder="you@company.com" required />
+            <input
+              type="email"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              placeholder="you@company.com"
+            />
           </div>
-          <button className="button" type="submit">Send Magic Link</button>
-          {emailSent && <p style={{marginTop:8}}>Check your inbox: {emailSent}</p>}
-        </form>
-        <p style={{marginTop:16}}>No account needed; any email works for sign-in.</p>
+          <button className="button" onClick={sendMagicLink}>Send Magic Link</button>
+          {msg && <p style={{ marginTop: 8 }}>{msg}</p>}
+        </div>
       </div>
     );
   }
 
   return (
-    <div>
-      <h1 className="text-xl" style={{marginBottom:12}}>Welcome, {sessionEmail}</h1>
-      <div className="card">
-        <p>Next steps:</p>
-        <ol>
-          <li>Open <a href="/settings">Settings</a> and click <strong>Initialize Demo Data</strong>.</li>
-          <li>Return here to see your sample project and make a printable bid.</li>
-        </ol>
-      </div>
-      <Projects />
-    </div>
-  );
-}
+    <div className="container">
+      <nav style={{ marginBottom: 16 }}>
+        <a href="/" style={{ marginRight: 16 }}>Home</a>
+        <a href="/settings">Settings</a>
+      </nav>
 
-function Projects() {
-  const [projects, setProjects] = useState<any[]>([]);
-  useEffect(() => {
-    (async () => {
-      const { data } = await supabase.from("Project").select("*").order("createdAt", { ascending: false });
-      setProjects(data || []);
-    })();
-  }, []);
+      <h1 className="title">Projects</h1>
 
-  if (!projects.length) return <p style={{marginTop:12}}>No projects yet. Go to <a href="/settings">Settings</a> and click <strong>Initialize Demo Data</strong>.</p>;
-  return (
-    <div style={{marginTop:16}}>
-      <h2 className="text-lg" style={{marginBottom:8}}>Projects</h2>
-      <table className="table">
-        <thead><tr><th>Name</th><th>Client</th><th>Actions</th></tr></thead>
-        <tbody>
-          {projects.map(p => (
-            <tr key={p.id}>
-              <td>{p.name}</td>
-              <td>{p.clientName}</td>
-              <td>
-                <ProjectActions projectId={p.id} />
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
-  );
-}
+      {projects.length === 0 && (
+        <div className="card">
+          <p>No projects yet.</p>
+          <p>Go to <a href="/settings">Settings</a> and click “Initialize Demo Data”, or ask your team to create one.</p>
+        </div>
+      )}
 
-function ProjectActions({ projectId }: { projectId: string }) {
-  const [estimate, setEstimate] = useState<any | null>(null);
-  const [snapshotId, setSnapshotId] = useState<string | null>(null);
-
-  useEffect(() => {
-    (async () => {
-      const { data } = await supabase.from("Estimate").select("*").eq("projectId", projectId).limit(1).maybeSingle();
-      setEstimate(data);
-    })();
-  }, [projectId]);
-
-  const createSnapshot = async () => {
-    if (!estimate) return;
-    const { data: items } = await supabase.from("EstimateItem").select("*").eq("estimateId", estimate.id);
-    if (!items?.length) return alert("No items on this estimate.");
-
-    const { data: project } = await supabase.from("Project").select("*, org:orgId(*)").eq("id", projectId).single();
-    const orgId = project?.org?.id;
-    const [{ data: settings }, { data: tax }, { data: tiers }] = await Promise.all([
-      supabase.from("OrgSettings").select("*").eq("orgId", orgId).single(),
-      supabase.from("TaxScope").select("*").eq("orgId", orgId).single(),
-      supabase.from("MarkupTier").select("*").eq("orgId", orgId).order("rank", { ascending: true })
-    ]);
-
-    const calc = await import("../utils/estimate");
-    const res = calc.totals({
-      items: items.map((i:any) => ({
-        quantity: i.quantity, unitCost: i.unitCost, markupPct: i.markupPct,
-        isMaterial: i.isMaterial, isLabor: i.isLabor, isEquipment: i.isEquipment
-      })),
-      overheadPct: estimate.overheadPct,
-      useMarkupTiers: settings?.useMarkupTiers ?? false,
-      tiers: (tiers||[]).map((t:any)=>({minAmount: t.minAmount, maxAmount: t.maxAmount ?? undefined, percent: t.percent, rank: t.rank})),
-      contingencyPct: settings?.defaultContingency ?? 5,
-      contingencyOrder: (settings?.contingencyOrder ?? "AFTER_MARKUP"),
-      taxRate: tax?.rate ?? 0,
-      taxScope: {
-        materials: !!tax?.taxMaterials,
-        labor: !!tax?.taxLabor,
-        equipment: !!tax?.taxEquipment,
-        markup: !!tax?.taxMarkup,
-        contingency: !!tax?.taxContingency
-      },
-      mobilization: { count: estimate.mobilizationCount ?? 0, price: settings?.mobilizationPrice ?? 3850 }
-    });
-
-    const payload = {
-      estimateId: estimate.id,
-      version: (Date.now() % 100000),
-      data: {
-        totalDirect: res.direct,
-        totalOverhead: res.overhead,
-        totalMarkup: res.markup,
-        mobilization: res.mobilization,
-        contingency: res.contingency,
-        tax: res.tax,
-        grandTotal: res.grand,
-        items: items.map((i:any)=>({ id: i.id, kind: i.kind, desc: i.description, qty: i.quantity, unit: i.unit, unitCost: i.unitCost, lineTotal: i.quantity * i.unitCost }))
-      }
-    };
-
-    const { data: snap, error } = await supabase.from("EstimateSnapshot").insert(payload).select("id").single();
-    if (error) return alert(error.message);
-    setSnapshotId(snap.id);
-  };
-
-  return (
-    <div className="no-print">
-      {estimate ? (
-        <>
-          <button className="button" onClick={createSnapshot}>Create Snapshot</button>
-          {" "}
-          {snapshotId && <a className="button secondary" href={`/b/${snapshotId}`} target="_blank">Open Printable Bid</a>}
-        </>
-      ) : <span>No estimate yet.</span>}
+      {projects.map((p) => (
+        <div key={p.id} className="card" style={{ marginBottom: 12 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+            <div>
+              <strong>{p.name}</strong>
+              <div style={{ fontSize: 12, opacity: 0.7 }}>Org: {p.orgId}</div>
+            </div>
+            <div>
+              <button className="button" disabled={busyProjectId === p.id} onClick={() => createSnapshot(p)}>
+                {busyProjectId === p.id ? "Working…" : "Create Snapshot"}
+              </button>
+            </div>
+          </div>
+        </div>
+      ))}
     </div>
   );
 }
