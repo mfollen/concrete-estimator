@@ -245,22 +245,89 @@ async function ensureDefaults(orgId: string) {
 }
 
 async function initDemoProject(orgId: string) {
-  const { data: me } = await supabase.auth.getUser();
-  const userId = me.user?.id;
+  try {
+    const { data: me, error: meErr } = await supabase.auth.getUser();
+    if (meErr) throw meErr;
+    const userId = me.user?.id;
+    if (!userId) throw new Error("No signed-in user.");
 
-  const { data: project } = await supabase.from("Project").insert({
-    orgId, name: "Warehouse Expansion", clientName: "BigCo", location: "Joliet, IL", createdBy: userId
-  }).select("*").single();
+    // 1) Create project
+    const { data: project, error: pErr } = await supabase
+      .from("Project")
+      .insert({
+        orgId,
+        name: "Warehouse Expansion",
+        clientName: "BigCo",
+        location: "Joliet, IL",
+        createdBy: userId
+      })
+      .select("*")
+      .single();
+    if (pErr) throw pErr;
 
-  const { data: estimate } = await supabase.from("Estimate").insert({
-    projectId: project.id, title: "Base Bid", overheadPct: 10, createdBy: userId, mobilizationCount: 1
-  }).select("*").single();
+    // 2) Create estimate
+    const { data: estimate, error: eErr } = await supabase
+      .from("Estimate")
+      .insert({
+        projectId: project.id,
+        title: "Base Bid",
+        overheadPct: 10,
+        createdBy: userId,
+        mobilizationCount: 1
+      })
+      .select("*")
+      .single();
+    if (eErr) throw eErr;
 
-  await supabase.from("EstimateItem").insert([
-    { estimateId: estimate.id, kind: "SLAB", description: "6\" slab on grade", unit: "SF", quantity: 20000, unitCost: 5.25, markupPct: 20, contingencyPct: 5, durationHours: 160, isMaterial: true, isLabor: true, isEquipment: true },
-    { estimateId: estimate.id, kind: "FOOTING", description: "Strip footing 24\"x12\"", unit: "LF", quantity: 600, unitCost: 18.5, markupPct: 15, contingencyPct: 5, durationHours: 80, isMaterial: true, isLabor: true },
-    { estimateId: estimate.id, kind: "WALL", description: "8\" formed wall", unit: "SF", quantity: 3000, unitCost: 15.0, markupPct: 12, contingencyPct: 5, durationHours: 120, isMaterial: true, isLabor: true }
-  ]);
+    // 3) Add items
+    const { error: iErr } = await supabase.from("EstimateItem").insert([
+      {
+        estimateId: estimate.id,
+        kind: "SLAB",
+        description: '6" slab on grade',
+        unit: "SF",
+        quantity: 20000,
+        unitCost: 5.25,
+        markupPct: 20,
+        contingencyPct: 5,
+        durationHours: 160,
+        isMaterial: true,
+        isLabor: true,
+        isEquipment: true
+      },
+      {
+        estimateId: estimate.id,
+        kind: "FOOTING",
+        description: 'Strip footing 24"x12"',
+        unit: "LF",
+        quantity: 600,
+        unitCost: 18.5,
+        markupPct: 15,
+        contingencyPct: 5,
+        durationHours: 80,
+        isMaterial: true,
+        isLabor: true
+      },
+      {
+        estimateId: estimate.id,
+        kind: "WALL",
+        description: '8" formed wall',
+        unit: "SF",
+        quantity: 3000,
+        unitCost: 15.0,
+        markupPct: 12,
+        contingencyPct: 5,
+        durationHours: 120,
+        isMaterial: true,
+        isLabor: true
+      }
+    ]);
+    if (iErr) throw iErr;
 
-  alert("Demo project created! Go back to Home and create a snapshot.");
+    alert("Demo project created! Go back to Home and create a snapshot.");
+  } catch (err: any) {
+    console.error("Init demo data failed:", err);
+    alert(`Initialize Demo Data failed: ${err?.message || String(err)}`);
+  }
+}
 }
