@@ -1,0 +1,18 @@
+:root{ --bg: #ffffff; --fg: #111827; }
+html, body { height: 100%; }
+body { margin: 0; font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial, Noto Sans, "Apple Color Emoji", "Segoe UI Emoji"; color: var(--fg); background: var(--bg); }
+a { color: #111827; }
+input, select, textarea, button { font: inherit; }
+.container { max-width: 960px; margin: 0 auto; padding: 24px; }
+.button { border: 1px solid #111827; background: #111827; color: white; padding: 10px 14px; border-radius: 8px; cursor: pointer; }
+.button.secondary { background: white; color: #111827; }
+.table { width: 100%; border-collapse: collapse; }
+.table th, .table td { border-bottom: 1px solid #e5e7eb; padding: 8px; text-align: left; }
+.card { border: 1px solid #e5e7eb; border-radius: 12px; padding: 16px; }
+.field { margin-bottom: 10px; }
+.field label { display: block; font-weight: 600; margin-bottom: 4px; }
+.field input, .field textarea, .field select { width: 100%; border: 1px solid #e5e7eb; border-radius: 8px; padding: 8px; }
+.header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px; }
+.nav a { margin-right: 12px; text-decoration: underline; }
+.printable h1,h2,h3 { margin: 0 0 8px 0; }
+@media print { .no-print { display: none; } .printable { padding: 0; } }
