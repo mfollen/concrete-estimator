@@ -3,274 +3,184 @@
 import { useEffect, useState } from "react";
 import { supabase } from "../lib/supabaseClient";
 
-type Project = { id: string; name: string; orgId: string };
+type ProjectRow = {
+  id: string;
+  name: string;
+  orgId: string;
+  createdat: string | null;
+};
 
-export default function HomePage() {
-  const [email, setEmail] = useState("");
-  const [userId, setUserId] = useState<string | null>(null);
+export default function Home() {
   const [loading, setLoading] = useState(true);
-  const [projects, setProjects] = useState<Project[]>([]);
-  const [busyProjectId, setBusyProjectId] = useState<string | null>(null);
-  const [msg, setMsg] = useState<string | null>(null);
+  const [meEmail, setMeEmail] = useState<string | null>(null);
+  const [projects, setProjects] = useState<ProjectRow[]>([]);
+  const [errMsg, setErrMsg] = useState<string | null>(null);
+
+  async function load() {
+    setLoading(true);
+    setErrMsg(null);
+    try {
+      // 1) Who am I?
+      const { data: auth, error: authErr } = await supabase.auth.getUser();
+      if (authErr) throw authErr;
+      const user = auth.user;
+      setMeEmail(user?.email ?? null);
+
+      if (!user) {
+        // not signed in -> show sign-in box markup and stop here
+        setProjects([]);
+        setLoading(false);
+        return;
+      }
+
+      // 2) Which orgs am I a member of?
+      const { data: memberships, error: memErr } = await supabase
+        .from("Membership")
+        .select("orgId")
+        .eq("userId", user.id);
+      if (memErr) throw memErr;
+
+      const orgIds = (memberships ?? []).map((m) => m.orgId).filter(Boolean);
+
+      if (orgIds.length === 0) {
+        setProjects([]);
+        setLoading(false);
+        return;
+      }
+
+      // 3) Projects in my orgs
+      const { data: proj, error: projErr } = await supabase
+        .from("Project")
+        .select("id, name, orgId, createdat")
+        .in("orgId", orgIds)
+        .order("createdat", { ascending: false })
+        .limit(50);
+
+      if (projErr) throw projErr;
+
+      setProjects(proj ?? []);
+    } catch (e: any) {
+      setErrMsg(e?.message || String(e));
+    } finally {
+      setLoading(false);
+    }
+  }
 
   useEffect(() => {
-    (async () => {
-      try {
-        const { data } = await supabase.auth.getUser();
-        const u = data.user;
-        if (u?.id) {
-          setUserId(u.id);
-          await loadProjects(u.id);
-        }
-      } finally {
-        setLoading(false);
-      }
-    })();
+    load();
   }, []);
 
-  async function sendMagicLink() {
+  // Simple sign-in UI (same as before), but include a build marker so we know this file is live
+  const buildMarker = "HOME-V3";
+
+  return (
+    <main style={{ maxWidth: 900, margin: "0 auto", padding: "2rem 1rem" }}>
+      <header style={{ display: "flex", justifyContent: "space-between", marginBottom: 24 }}>
+        <nav style={{ display: "flex", gap: 16 }}>
+          <a href="/" style={{ textDecoration: "none" }}>Home</a>
+          <a href="/settings" style={{ textDecoration: "none" }}>Settings</a>
+        </nav>
+        <strong>Concrete Estimator</strong>
+      </header>
+
+      <div style={{ marginBottom: 8, opacity: 0.6 }}>Build marker: {buildMarker}</div>
+
+      {!meEmail ? (
+        <>
+          <h1>Sign in to Concrete Estimator</h1>
+          <SignInForm />
+        </>
+      ) : (
+        <>
+          <h1>Welcome, {meEmail}</h1>
+
+          {loading && <p>Loading your projects…</p>}
+
+          {errMsg && (
+            <p style={{ color: "crimson" }}>
+              Couldn’t load projects: {errMsg}{" "}
+              <button onClick={load} style={{ marginLeft: 8 }}>Retry</button>
+            </p>
+          )}
+
+          {!loading && !errMsg && projects.length === 0 && (
+            <div style={{ marginTop: 16 }}>
+              <p>No projects yet.</p>
+              <p>
+                Go to <a href="/settings">Settings</a> and click <em>Initialize Demo Data</em>.
+              </p>
+            </div>
+          )}
+
+          {!loading && projects.length > 0 && (
+            <section style={{ marginTop: 16 }}>
+              <h2>Your Projects</h2>
+              <ul style={{ listStyle: "none", padding: 0, marginTop: 8 }}>
+                {projects.map((p) => (
+                  <li
+                    key={p.id}
+                    style={{
+                      border: "1px solid #e5e7eb",
+                      borderRadius: 8,
+                      padding: 12,
+                      marginBottom: 10,
+                    }}
+                  >
+                    <div style={{ fontWeight: 600 }}>{p.name}</div>
+                    <div style={{ fontSize: 13, opacity: 0.7 }}>
+                      Project ID: {p.id} · Org: {p.orgId}
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            </section>
+          )}
+        </>
+      )}
+    </main>
+  );
+}
+
+function SignInForm() {
+  // very simple email-only "magic link" sender
+  const [email, setEmail] = useState("");
+  const [sending, setSending] = useState(false);
+  const [msg, setMsg] = useState<string | null>(null);
+
+  async function send() {
+    setSending(true);
     setMsg(null);
-    const redirectTo =
-      typeof window !== "undefined" ? window.location.origin : undefined;
-    const { error } = await supabase.auth.signInWithOtp({
-      email,
-      options: { emailRedirectTo: redirectTo },
-    });
-    if (error) setMsg(`Error: ${error.message}`);
-    else setMsg("Check your email for the magic link.");
-  }
-
-  /** Load projects for ALL orgs this user belongs to. If none, create an org + membership. */
-  async function loadProjects(uid: string) {
-    // memberships
-    const { data: mems, error: memErr } = await supabase
-      .from("Membership")
-      .select('"orgId"')
-      .eq('"userId"', uid);
-    if (memErr) throw memErr;
-
-    let orgIds = (mems || []).map((m: any) => m.orgId as string);
-
-    // create default org if none
-    if (orgIds.length === 0) {
-      const { data: newOrg, error: orgErr } = await supabase
-        .from("Org")
-        .insert({ name: "My Concrete Company" })
-        .select("id")
-        .single();
-      if (orgErr) throw orgErr;
-      const newOrgId = (newOrg as any).id as string;
-
-      const { error: memInsErr } = await supabase
-        .from("Membership")
-        .insert({ orgId: newOrgId, userId: uid, role: "OWNER" });
-      if (memInsErr) throw memInsErr;
-
-      orgIds = [newOrgId];
-    }
-
-    // load projects across these orgs
-    const { data: projs, error: pErr } = await supabase
-      .from("Project")
-      .select('id, name, "orgId"')
-      .in('"orgId"', orgIds);
-    if (pErr) throw pErr;
-
-    setProjects((projs || []) as Project[]);
-  }
-
-  /** Create a snapshot for latest estimate & open printable bid */
-  async function createSnapshot(project: Project) {
     try {
-      setBusyProjectId(project.id);
-
-      const { data: est, error: eErr } = await supabase
-        .from("Estimate")
-        .select('id, title, overheadPct, mobilizationCount, createdAt')
-        .eq('"projectId"', project.id)
-        .order("createdAt", { ascending: false })
-        .limit(1)
-        .single();
-      if (eErr) throw eErr;
-
-      const { data: items, error: iErr } = await supabase
-        .from("EstimateItem")
-        .select(
-          'id, description, unit, quantity, unitCost, markupPct, contingencyPct, isMaterial, isLabor, isEquipment'
-        )
-        .eq('"estimateId"', (est as any).id);
-      if (iErr) throw iErr;
-
-      // org-level settings/tax/tiers
-      const orgId = project.orgId;
-      const [{ data: S }, { data: T }, { data: MK }] = await Promise.all([
-        supabase.from("OrgSettings").select("*").eq('"orgId"', orgId).single(),
-        supabase.from("TaxScope").select("*").eq('"orgId"', orgId).single(),
-        supabase
-          .from("MarkupTier")
-          .select("*")
-          .eq('"orgId"', orgId)
-          .order("rank", { ascending: true }),
-      ]);
-
-      // simple math (safe defaults)
-      const normItems = (items || []).map((it: any) => {
-        const qty = Number(it.quantity || 0);
-        const unitCost = Number(it.unitCost || 0);
-        return {
-          id: it.id,
-          lineTotal: qty * unitCost,
-          isMaterial: !!it.isMaterial,
-          isLabor: !!it.isLabor,
-          isEquipment: !!it.isEquipment,
-        };
+      const { error } = await supabase.auth.signInWithOtp({
+        email,
+        options: {
+          emailRedirectTo: window.location.origin, // come back to this domain
+        },
       });
-
-      const subTotal = normItems.reduce((s: number, i: any) => s + i.lineTotal, 0);
-
-      // markup tiers
-      let markupPct = 0;
-      if ((S as any)?.useMarkupTiers && (MK as any)?.length) {
-        const amt = subTotal;
-        let matched = false;
-        for (const t of MK as any[]) {
-          const min = Number((t as any).minAmount || 0);
-          const max =
-            (t as any).maxAmount === null ? Infinity : Number((t as any).maxAmount);
-          if (amt >= min && amt < max) {
-            markupPct = Number((t as any).percent || 0);
-            matched = true;
-            break;
-          }
-        }
-        if (!matched && (MK as any[]).length > 0) {
-          markupPct = Number(((MK as any[])[(MK as any[]).length - 1] as any).percent || 0);
-        }
-      } else {
-        // fallback: 10%
-        markupPct = 10;
-      }
-      const markupValue = (subTotal * markupPct) / 100;
-
-      const contingencyPct = Number((S as any)?.defaultContingency || 5);
-      const basePlusMarkup = subTotal + markupValue;
-      const contingencyValue = (basePlusMarkup * contingencyPct) / 100;
-
-      const taxableBase =
-        ((T as any)?.taxMaterials
-          ? normItems.filter((i: any) => i.isMaterial).reduce((s: number, i: any) => s + i.lineTotal, 0)
-          : 0) +
-        ((T as any)?.taxLabor
-          ? normItems.filter((i: any) => i.isLabor).reduce((s: number, i: any) => s + i.lineTotal, 0)
-          : 0) +
-        ((T as any)?.taxEquipment
-          ? normItems.filter((i: any) => i.isEquipment).reduce((s: number, i: any) => s + i.lineTotal, 0)
-          : 0) +
-        ((T as any)?.taxMarkup ? markupValue : 0) +
-        ((T as any)?.taxContingency ? contingencyValue : 0);
-
-      const taxRate = Number((T as any)?.rate || 0);
-      const taxValue = (taxableBase * taxRate) / 100;
-
-      const grandTotal = basePlusMarkup + contingencyValue + taxValue;
-
-      const snapshotData = {
-        items: normItems,
-        subTotal,
-        markupPct,
-        markupValue,
-        contingencyPct,
-        contingencyValue,
-        taxRate,
-        taxValue,
-        grandTotal,
-      };
-
-      const { data: snap, error: sErr } = await supabase
-        .from("EstimateSnapshot")
-        .insert({ estimateId: (est as any).id, version: 1, data: snapshotData })
-        .select("id")
-        .single();
-      if (sErr) throw sErr;
-
-      window.location.href = `/b/${(snap as any).id}`;
-    } catch (err: any) {
-      console.error("Create snapshot failed:", err);
-      alert(`Create snapshot failed: ${err?.message || String(err)}`);
+      if (error) throw error;
+      setMsg("Check your email for a magic link.");
+    } catch (e: any) {
+      setMsg(e?.message || String(e));
     } finally {
-      setBusyProjectId(null);
+      setSending(false);
     }
-  }
-
-  // ---------- UI ----------
-  if (loading) return <div className="container">Loading…</div>;
-
-  if (!userId) {
-    return (
-      <div className="container" style={{ maxWidth: 420 }}>
-        <h1 className="title">Sign in to Concrete Estimator</h1>
-        <div style={{ fontSize: 12, opacity: 0.6, marginBottom: 8 }}>
-          Build marker: HOME-V2
-        </div>
-        <div className="card">
-          <div className="field">
-            <label>Email</label>
-            <input
-              type="email"
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              placeholder="you@company.com"
-            />
-          </div>
-          <button className="button" onClick={sendMagicLink}>
-            Send Magic Link
-          </button>
-          {msg && <p style={{ marginTop: 8 }}>{msg}</p>}
-        </div>
-      </div>
-    );
   }
 
   return (
-    <div className="container">
-      <nav style={{ marginBottom: 16 }}>
-        <a href="/" style={{ marginRight: 16 }}>Home</a>
-        <a href="/settings">Settings</a>
-      </nav>
-
-      <h1 className="title">Projects</h1>
-      <div style={{ fontSize: 12, opacity: 0.6, marginBottom: 8 }}>
-        Build marker: HOME-V2
+    <div style={{ border: "1px solid #e5e7eb", borderRadius: 8, padding: 16, maxWidth: 420 }}>
+      <div style={{ marginBottom: 8 }}>
+        <label style={{ display: "block", fontSize: 12, marginBottom: 4 }}>Email</label>
+        <input
+          value={email}
+          onChange={(e) => setEmail(e.target.value)}
+          placeholder="you@company.com"
+          style={{ width: "100%", padding: 10, borderRadius: 6, border: "1px solid #e5e7eb" }}
+        />
       </div>
-
-      {projects.length === 0 && (
-        <div className="card">
-          <p>No projects yet.</p>
-          <p>
-            Go to <a href="/settings">Settings</a> and click “Initialize Demo Data”.
-          </p>
-        </div>
-      )}
-
-      {projects.map((p) => (
-        <div key={p.id} className="card" style={{ marginBottom: 12 }}>
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-            <div>
-              <strong>{p.name}</strong>
-              <div style={{ fontSize: 12, opacity: 0.7 }}>Org: {p.orgId}</div>
-            </div>
-            <div>
-              <button
-                className="button"
-                disabled={busyProjectId === p.id}
-                onClick={() => createSnapshot(p)}
-              >
-                {busyProjectId === p.id ? "Working…" : "Create Snapshot"}
-              </button>
-            </div>
-          </div>
-        </div>
-      ))}
+      <button onClick={send} disabled={sending} style={{ padding: "8px 12px" }}>
+        {sending ? "Sending…" : "Send Magic Link"}
+      </button>
+      {msg && <p style={{ marginTop: 8 }}>{msg}</p>}
     </div>
   );
 }
