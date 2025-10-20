@@ -5,14 +5,15 @@ import { supabase } from "../../lib/supabaseClient";
 type Org = { id: string; name: string };
 
 export default function Settings() {
-  const [demoStatus, setDemoStatus] = useState<string | null>(null);
-  const [demoBusy, setDemoBusy] = useState(false);
   const [loading, setLoading] = useState(true);
   const [errorText, setErrorText] = useState<string | null>(null);
   const [org, setOrg] = useState<Org | null>(null);
   const [settings, setSettings] = useState<any | null>(null);
   const [tax, setTax] = useState<any | null>(null);
   const [tiers, setTiers] = useState<any[]>([]);
+  // 👇 NEW: needed by initDemoProject
+  const [demoStatus, setDemoStatus] = useState<string | null>(null);
+  const [demoBusy, setDemoBusy] = useState(false);
 
   useEffect(() => {
     (async () => {
@@ -32,7 +33,7 @@ export default function Settings() {
           .select('"orgId"')
           .eq('"userId"', user.id);
         if (memErr) throw memErr;
-        if (mems?.length) orgId = mems[0].orgId;
+        if (mems?.length) orgId = (mems as any[])[0].orgId;
 
         if (!orgId) {
           const { data: newOrg, error: orgErr } = await supabase
@@ -41,7 +42,7 @@ export default function Settings() {
             .select("id, name")
             .single();
           if (orgErr) throw orgErr;
-          orgId = newOrg.id;
+          orgId = (newOrg as any).id as string;
 
           const { error: memInsErr } = await supabase
             .from("Membership")
@@ -73,7 +74,7 @@ export default function Settings() {
 
         setSettings(S);
         setTax(T);
-        setTiers(MK || []);
+        setTiers((MK || []) as any[]);
       } catch (e: any) {
         console.error(e);
         setErrorText(e?.message || "Unknown error while initializing settings.");
@@ -104,16 +105,21 @@ export default function Settings() {
   if (!org || !settings || !tax) return <div className="container">Could not load settings.</div>;
 
   return (
-    <div>
-      <h1 className="text-xl" style={{ marginBottom: 12 }}>Settings</h1>
+    <div className="container">
+      <nav style={{ marginBottom: 16 }}>
+        <a href="/" style={{ marginRight: 16 }}>Home</a>
+        <a href="/settings">Settings</a>
+      </nav>
 
-<div className="card" style={{ marginBottom: 16 }}>
-  <p><strong>Step 1:</strong> Click to create a demo project.</p>
-  <button className="button" disabled={demoBusy} onClick={() => initDemoProject(org!.id)}>
-    {demoBusy ? "Working…" : "Initialize Demo Data"}
-  </button>
-  {demoStatus && <p style={{marginTop:8}}>{demoStatus}</p>}
-</div>
+      <h1 className="title">Settings</h1>
+
+      <div className="card" style={{ marginBottom: 16 }}>
+        <p><strong>Step 1:</strong> Click to create a demo project.</p>
+        <button className="button" disabled={demoBusy} onClick={() => initDemoProject(org!.id)}>
+          {demoBusy ? "Working…" : "Initialize Demo Data"}
+        </button>
+        {demoStatus && <p style={{marginTop:8}}>{demoStatus}</p>}
+      </div>
 
       <div className="card" style={{ marginBottom: 16 }}>
         <h2 className="text-lg">Branding</h2>
@@ -264,7 +270,7 @@ async function initDemoProject(orgId: string) {
     const { data: estimate, error: eErr } = await supabase
       .from("Estimate")
       .insert({
-        projectId: project.id,
+        projectId: (project as any).id,
         title: "Base Bid",
         overheadPct: 10,
         createdBy: userId,
@@ -277,7 +283,7 @@ async function initDemoProject(orgId: string) {
     setDemoStatus("Adding sample items…");
     const { error: iErr } = await supabase.from("EstimateItem").insert([
       {
-        estimateId: estimate.id,
+        estimateId: (estimate as any).id,
         kind: "SLAB",
         description: '6" slab on grade',
         unit: "SF",
@@ -291,7 +297,7 @@ async function initDemoProject(orgId: string) {
         isEquipment: true,
       },
       {
-        estimateId: estimate.id,
+        estimateId: (estimate as any).id,
         kind: "FOOTING",
         description: 'Strip footing 24"x12"',
         unit: "LF",
@@ -304,7 +310,7 @@ async function initDemoProject(orgId: string) {
         isLabor: true,
       },
       {
-        estimateId: estimate.id,
+        estimateId: (estimate as any).id,
         kind: "WALL",
         description: '8" formed wall',
         unit: "SF",
