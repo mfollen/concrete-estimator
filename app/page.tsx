@@ -3,11 +3,15 @@
 import { useEffect, useState } from "react";
 import { supabase } from "../lib/supabaseClient";
 
+/**
+ * DB row shape used on Home
+ * NOTE: in your DB the column name is `createdat` (all lowercase).
+ */
 type ProjectRow = {
   id: string;
   name: string;
   orgId: string;
-  createdat: string | null;
+  createdat: string | null; // from Postgres
 };
 
 export default function Home() {
@@ -20,27 +24,27 @@ export default function Home() {
     setLoading(true);
     setErrMsg(null);
     try {
-      // 1) Who am I?
+      // 1) Auth user
       const { data: auth, error: authErr } = await supabase.auth.getUser();
       if (authErr) throw authErr;
-      const user = auth.user;
+      const user = auth.user ?? null;
       setMeEmail(user?.email ?? null);
 
       if (!user) {
-        // not signed in -> show sign-in box markup and stop here
         setProjects([]);
         setLoading(false);
         return;
       }
 
-      // 2) Which orgs am I a member of?
+      // 2) Org memberships for this user
       const { data: memberships, error: memErr } = await supabase
         .from("Membership")
         .select("orgId")
         .eq("userId", user.id);
+
       if (memErr) throw memErr;
 
-      const orgIds = (memberships ?? []).map((m) => m.orgId).filter(Boolean);
+      const orgIds = (memberships ?? []).map((m: any) => m.orgId).filter(Boolean);
 
       if (orgIds.length === 0) {
         setProjects([]);
@@ -48,19 +52,40 @@ export default function Home() {
         return;
       }
 
-      // 3) Projects in my orgs
-      const { data: proj, error: projErr } = await supabase
+      // 3) Projects within those orgs
+      // IMPORTANT: your DB column is `createdat` (lowercase). Ordering on `createdAt` causes a 400.
+      let proj: ProjectRow[] | null = null;
+
+      const { data, error } = await supabase
         .from("Project")
         .select("id, name, orgId, createdat")
         .in("orgId", orgIds)
-        .order("createdat", { ascending: false })
+        .order("createdat", { ascending: false }) // correct column name
         .limit(50);
 
-      if (projErr) throw projErr;
+      if (error) {
+        // As a safety net, retry without order then sort on the client
+        const retry = await supabase
+          .from("Project")
+          .select("id, name, orgId, createdat")
+          .in("orgId", orgIds)
+          .limit(50);
+
+        if (retry.error) throw retry.error;
+
+        proj = (retry.data ?? []).sort((a: ProjectRow, b: ProjectRow) => {
+          const aT = a.createdat ?? "";
+          const bT = b.createdat ?? "";
+          return aT === bT ? 0 : aT < bT ? 1 : -1; // descending
+        });
+      } else {
+        proj = data ?? [];
+      }
 
       setProjects(proj ?? []);
     } catch (e: any) {
       setErrMsg(e?.message || String(e));
+      setProjects([]);
     } finally {
       setLoading(false);
     }
@@ -70,8 +95,7 @@ export default function Home() {
     load();
   }, []);
 
-  // Simple sign-in UI (same as before), but include a build marker so we know this file is live
-  const buildMarker = "HOME-V3";
+  const buildMarker = "HOME-V3"; // shows which build you’re on
 
   return (
     <main style={{ maxWidth: 900, margin: "0 auto", padding: "2rem 1rem" }}>
@@ -141,8 +165,8 @@ export default function Home() {
   );
 }
 
+/** Simple email-only magic link sign-in form */
 function SignInForm() {
-  // very simple email-only "magic link" sender
   const [email, setEmail] = useState("");
   const [sending, setSending] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
@@ -153,9 +177,7 @@ function SignInForm() {
     try {
       const { error } = await supabase.auth.signInWithOtp({
         email,
-        options: {
-          emailRedirectTo: window.location.origin, // come back to this domain
-        },
+        options: { emailRedirectTo: window.location.origin },
       });
       if (error) throw error;
       setMsg("Check your email for a magic link.");
