@@ -3,38 +3,35 @@
 import { useEffect, useState } from "react";
 import { supabase } from "../lib/supabaseClient";
 
-/** Small helpers */
-function money(n: number) {
-  return `$${(Math.round((n ?? 0) * 100) / 100).toLocaleString()}`;
-}
-
 type Project = { id: string; name: string; orgId: string };
 
 export default function HomePage() {
   const [email, setEmail] = useState("");
   const [userId, setUserId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
-  const [orgIds, setOrgIds] = useState<string[]>([]);
   const [projects, setProjects] = useState<Project[]>([]);
   const [busyProjectId, setBusyProjectId] = useState<string | null>(null);
   const [msg, setMsg] = useState<string | null>(null);
 
   useEffect(() => {
     (async () => {
-      const { data } = await supabase.auth.getUser();
-      const u = data.user;
-      if (u?.id) {
-        setUserId(u.id);
-        await ensureOrgsAndLoad(u.id);
+      try {
+        const { data } = await supabase.auth.getUser();
+        const u = data.user;
+        if (u?.id) {
+          setUserId(u.id);
+          await loadProjects(u.id);
+        }
+      } finally {
+        setLoading(false);
       }
-      setLoading(false);
     })();
   }, []);
 
-  /** Send magic link */
   async function sendMagicLink() {
     setMsg(null);
-    const redirectTo = typeof window !== "undefined" ? window.location.origin : undefined;
+    const redirectTo =
+      typeof window !== "undefined" ? window.location.origin : undefined;
     const { error } = await supabase.auth.signInWithOtp({
       email,
       options: { emailRedirectTo: redirectTo },
@@ -43,54 +40,50 @@ export default function HomePage() {
     else setMsg("Check your email for the magic link.");
   }
 
-  /** Ensures at least one org and loads all projects for all orgs the user belongs to */
-  async function ensureOrgsAndLoad(uid: string) {
+  /** Load projects for ALL orgs this user belongs to. If none, create an org + membership. */
+  async function loadProjects(uid: string) {
     // memberships
-    let { data: mems, error: memErr } = await supabase
+    const { data: mems, error: memErr } = await supabase
       .from("Membership")
       .select('"orgId"')
       .eq('"userId"', uid);
     if (memErr) throw memErr;
 
-    let orgs = (mems || []).map((m: any) => m.orgId as string);
+    let orgIds = (mems || []).map((m: any) => m.orgId as string);
 
-    // if none, create default org + membership
-    if (!orgs.length) {
+    // create default org if none
+    if (orgIds.length === 0) {
       const { data: newOrg, error: orgErr } = await supabase
         .from("Org")
         .insert({ name: "My Concrete Company" })
         .select("id")
         .single();
       if (orgErr) throw orgErr;
-      const newOrgId = newOrg!.id as string;
+      const newOrgId = (newOrg as any).id as string;
 
       const { error: memInsErr } = await supabase
         .from("Membership")
         .insert({ orgId: newOrgId, userId: uid, role: "OWNER" });
       if (memInsErr) throw memInsErr;
 
-      orgs = [newOrgId];
+      orgIds = [newOrgId];
     }
 
-    setOrgIds(orgs);
-
-    // load projects across all orgs for this user
+    // load projects across these orgs
     const { data: projs, error: pErr } = await supabase
       .from("Project")
       .select('id, name, "orgId"')
-      .in('"orgId"', orgs);
+      .in('"orgId"', orgIds);
     if (pErr) throw pErr;
 
     setProjects((projs || []) as Project[]);
   }
 
-  /** Create a snapshot for latest estimate on a project and open printable bid */
+  /** Create a snapshot for latest estimate & open printable bid */
   async function createSnapshot(project: Project) {
     try {
       setBusyProjectId(project.id);
-      setMsg(null);
 
-      // latest estimate
       const { data: est, error: eErr } = await supabase
         .from("Estimate")
         .select('id, title, overheadPct, mobilizationCount, createdAt')
@@ -100,16 +93,15 @@ export default function HomePage() {
         .single();
       if (eErr) throw eErr;
 
-      // items
       const { data: items, error: iErr } = await supabase
         .from("EstimateItem")
         .select(
           'id, description, unit, quantity, unitCost, markupPct, contingencyPct, isMaterial, isLabor, isEquipment'
         )
-        .eq('"estimateId"', est.id);
+        .eq('"estimateId"', (est as any).id);
       if (iErr) throw iErr;
 
-      // org-level settings/tax/tiers for THIS project org
+      // org-level settings/tax/tiers
       const orgId = project.orgId;
       const [{ data: S }, { data: T }, { data: MK }] = await Promise.all([
         supabase.from("OrgSettings").select("*").eq('"orgId"', orgId).single(),
@@ -121,62 +113,63 @@ export default function HomePage() {
           .order("rank", { ascending: true }),
       ]);
 
-      // normalize items
+      // simple math (safe defaults)
       const normItems = (items || []).map((it: any) => {
         const qty = Number(it.quantity || 0);
         const unitCost = Number(it.unitCost || 0);
-        const lineTotal = qty * unitCost;
         return {
           id: it.id,
-          desc: it.description,
-          unit: it.unit,
-          qty,
-          unitCost,
+          lineTotal: qty * unitCost,
           isMaterial: !!it.isMaterial,
           isLabor: !!it.isLabor,
           isEquipment: !!it.isEquipment,
-          lineTotal,
         };
       });
 
-      const subTotal = normItems.reduce((s, i) => s + i.lineTotal, 0);
+      const subTotal = normItems.reduce((s: number, i: any) => s + i.lineTotal, 0);
 
-      // markup via tiers (or fallback)
+      // markup tiers
       let markupPct = 0;
-      if (S?.useMarkupTiers && MK?.length) {
+      if ((S as any)?.useMarkupTiers && (MK as any)?.length) {
         const amt = subTotal;
         let matched = false;
-        for (const t of MK) {
-          const min = Number(t.minAmount || 0);
-          const max = t.maxAmount === null ? Infinity : Number(t.maxAmount);
+        for (const t of MK as any[]) {
+          const min = Number((t as any).minAmount || 0);
+          const max =
+            (t as any).maxAmount === null ? Infinity : Number((t as any).maxAmount);
           if (amt >= min && amt < max) {
-            markupPct = Number(t.percent || 0);
+            markupPct = Number((t as any).percent || 0);
             matched = true;
             break;
           }
         }
-        if (!matched && MK.length > 0) markupPct = Number(MK[MK.length - 1].percent || 0);
+        if (!matched && (MK as any[]).length > 0) {
+          markupPct = Number(((MK as any[])[(MK as any[]).length - 1] as any).percent || 0);
+        }
       } else {
-        const mpctAvg =
-          (items || []).reduce((s: number, it: any) => s + Number(it.markupPct || 0), 0) /
-          Math.max(1, (items || []).length);
-        markupPct = isFinite(mpctAvg) ? mpctAvg : 0;
+        // fallback: 10%
+        markupPct = 10;
       }
       const markupValue = (subTotal * markupPct) / 100;
 
-      // contingency (after markup per your preference)
-      const contingencyPct = Number(S?.defaultContingency || 0);
+      const contingencyPct = Number((S as any)?.defaultContingency || 5);
       const basePlusMarkup = subTotal + markupValue;
       const contingencyValue = (basePlusMarkup * contingencyPct) / 100;
 
-      // tax by buckets
       const taxableBase =
-        (T?.taxMaterials ? normItems.filter(i => i.isMaterial).reduce((s, i) => s + i.lineTotal, 0) : 0) +
-        (T?.taxLabor ? normItems.filter(i => i.isLabor).reduce((s, i) => s + i.lineTotal, 0) : 0) +
-        (T?.taxEquipment ? normItems.filter(i => i.isEquipment).reduce((s, i) => s + i.lineTotal, 0) : 0) +
-        (T?.taxMarkup ? markupValue : 0) +
-        (T?.taxContingency ? contingencyValue : 0);
-      const taxRate = Number(T?.rate || 0);
+        ((T as any)?.taxMaterials
+          ? normItems.filter((i: any) => i.isMaterial).reduce((s: number, i: any) => s + i.lineTotal, 0)
+          : 0) +
+        ((T as any)?.taxLabor
+          ? normItems.filter((i: any) => i.isLabor).reduce((s: number, i: any) => s + i.lineTotal, 0)
+          : 0) +
+        ((T as any)?.taxEquipment
+          ? normItems.filter((i: any) => i.isEquipment).reduce((s: number, i: any) => s + i.lineTotal, 0)
+          : 0) +
+        ((T as any)?.taxMarkup ? markupValue : 0) +
+        ((T as any)?.taxContingency ? contingencyValue : 0);
+
+      const taxRate = Number((T as any)?.rate || 0);
       const taxValue = (taxableBase * taxRate) / 100;
 
       const grandTotal = basePlusMarkup + contingencyValue + taxValue;
@@ -193,16 +186,14 @@ export default function HomePage() {
         grandTotal,
       };
 
-      // save snapshot
       const { data: snap, error: sErr } = await supabase
         .from("EstimateSnapshot")
-        .insert({ estimateId: est.id, version: 1, data: snapshotData })
+        .insert({ estimateId: (est as any).id, version: 1, data: snapshotData })
         .select("id")
         .single();
       if (sErr) throw sErr;
 
-      // open printable bid
-      window.location.href = `/b/${snap.id}`;
+      window.location.href = `/b/${(snap as any).id}`;
     } catch (err: any) {
       console.error("Create snapshot failed:", err);
       alert(`Create snapshot failed: ${err?.message || String(err)}`);
@@ -211,13 +202,16 @@ export default function HomePage() {
     }
   }
 
-  /** -------- Render -------- */
+  // ---------- UI ----------
   if (loading) return <div className="container">Loading…</div>;
 
   if (!userId) {
     return (
       <div className="container" style={{ maxWidth: 420 }}>
         <h1 className="title">Sign in to Concrete Estimator</h1>
+        <div style={{ fontSize: 12, opacity: 0.6, marginBottom: 8 }}>
+          Build marker: HOME-V2
+        </div>
         <div className="card">
           <div className="field">
             <label>Email</label>
@@ -228,7 +222,9 @@ export default function HomePage() {
               placeholder="you@company.com"
             />
           </div>
-          <button className="button" onClick={sendMagicLink}>Send Magic Link</button>
+          <button className="button" onClick={sendMagicLink}>
+            Send Magic Link
+          </button>
           {msg && <p style={{ marginTop: 8 }}>{msg}</p>}
         </div>
       </div>
@@ -243,11 +239,16 @@ export default function HomePage() {
       </nav>
 
       <h1 className="title">Projects</h1>
+      <div style={{ fontSize: 12, opacity: 0.6, marginBottom: 8 }}>
+        Build marker: HOME-V2
+      </div>
 
       {projects.length === 0 && (
         <div className="card">
           <p>No projects yet.</p>
-          <p>Go to <a href="/settings">Settings</a> and click “Initialize Demo Data”, or ask your team to create one.</p>
+          <p>
+            Go to <a href="/settings">Settings</a> and click “Initialize Demo Data”.
+          </p>
         </div>
       )}
 
@@ -259,7 +260,11 @@ export default function HomePage() {
               <div style={{ fontSize: 12, opacity: 0.7 }}>Org: {p.orgId}</div>
             </div>
             <div>
-              <button className="button" disabled={busyProjectId === p.id} onClick={() => createSnapshot(p)}>
+              <button
+                className="button"
+                disabled={busyProjectId === p.id}
+                onClick={() => createSnapshot(p)}
+              >
                 {busyProjectId === p.id ? "Working…" : "Create Snapshot"}
               </button>
             </div>
