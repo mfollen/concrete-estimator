@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { supabase } from "../lib/supabaseClient";
 
-/** NOTE: DB column is `createdat` (all lowercase) */
+/** NOTE: DB column is `createdat` (lowercase) */
 type ProjectRow = {
   id: string;
   name: string;
@@ -33,38 +33,14 @@ export default function Home() {
         return;
       }
 
-      // 2) Org memberships for this user
-      const { data: memberships, error: memErr } = await supabase
-        .from("Membership")
-        .select("orgId")
-        .eq("userId", user.id);
-      if (memErr) throw memErr;
-
-      const orgIds = (memberships ?? []).map((m: any) => m.orgId).filter(Boolean);
-
-      if (orgIds.length === 0) {
-        setProjects([]);
-        setLoading(false);
-        return;
-      }
-
-      // 3) Fetch projects WITHOUT server-side order (avoid createdAt/createdat mismatch)
-      const { data: projData, error: projErr } = await supabase
-        .from("Project")
-        .select("id, name, orgId, createdat")
-        .in("orgId", orgIds)
-        .limit(50);
-
-      if (projErr) throw projErr;
-
-      // Sort on the client by `createdat` DESC
-      const sorted = (projData ?? []).sort((a: ProjectRow, b: ProjectRow) => {
-        const at = a.createdat ?? "";
-        const bt = b.createdat ?? "";
-        return at === bt ? 0 : at < bt ? 1 : -1; // newest first
+      // 2) Fetch via RPC to avoid any URL order params
+      const { data, error } = await supabase.rpc("list_user_projects", {
+        p_user_id: user.id,
       });
 
-      setProjects(sorted);
+      if (error) throw error;
+
+      setProjects((data ?? []) as ProjectRow[]);
     } catch (e: any) {
       console.error("Home load error:", e);
       setErrMsg(e?.message || String(e));
@@ -78,7 +54,7 @@ export default function Home() {
     load();
   }, []);
 
-  const buildMarker = "HOME-V3-NO-SERVER-ORDER";
+  const buildMarker = "HOME-V4-RPC";
 
   return (
     <main style={{ maxWidth: 900, margin: "0 auto", padding: "2rem 1rem" }}>
