@@ -2,60 +2,56 @@
 
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
-import { useRouter, useSearchParams } from "next/navigation";
+import { useParams } from "next/navigation";
 import { supabase } from "../../../lib/supabaseClient";
-import {
-  lineSubtotal,
-  withMarkupAndContingency,
-  addMobilization,
-  applyTax,
-  MarkupTier,
-  round2,
-} from "../../../utils/estimate";
 
+// ------- Minimal shapes to help with intellisense only (not used in .from<T>())
 type Project = {
   id: string;
   name: string;
   orgId: string;
-  createdat: string;
+  clientName?: string | null;
+  location?: string | null;
+  createdat?: string | null;
 };
 
 type Estimate = {
   id: string;
   projectId: string;
   title: string;
-  overheadPct: number | null;
-  mobilizationCount: number | null;
-  overtimeHoursPerDay: number | null;
-  createdBy: string | null;
+  overheadPct?: number | null;
+  mobilizationCount?: number | null;
+  overtimeHoursPerDay?: number | null;
+  createdat?: string | null;
 };
 
 type EstimateItem = {
   id: string;
   estimateId: string;
-  kind: "SLAB" | "FOOTING" | "WALL" | "OTHER";
+  kind: string; // e.g. 'SLAB', 'FOOTING', etc.
   description: string;
   unit: string;
   quantity: number;
   unitCost: number;
-  markupPct: number; // used only when tiers are OFF
-  contingencyPct: number;
-  durationHours: number | null;
-  isMaterial: boolean;
-  isLabor: boolean;
-  isEquipment: boolean;
+  markupPct?: number | null;
+  contingencyPct?: number | null;
+  durationHours?: number | null;
+  isMaterial?: boolean | null;
+  isLabor?: boolean | null;
+  isEquipment?: boolean | null;
+  rank?: number | null;
 };
 
 type OrgSettings = {
   orgId: string;
   useMarkupTiers: boolean;
-  defaultContingency: number | null;
+  defaultContingency: number;
   contingencyOrder: "AFTER_MARKUP" | "BEFORE_MARKUP";
   mobilizationPrice: number;
-  mobilizationAutoPerCrewDay: boolean;
-  crewHoursPerDay: number;
-  logoUrl: string | null;
-  validityDays: number | null;
+  mobilizationAutoPerCrewDay?: boolean | null;
+  crewHoursPerDay?: number | null;
+  logoUrl?: string | null;
+  validityDays?: number | null;
 };
 
 type TaxScope = {
@@ -68,460 +64,306 @@ type TaxScope = {
   taxContingency: boolean;
 };
 
-export default function BidPage({ params }: { params: { id: string } }) {
-  const projectId = params.id;
-  const search = useSearchParams();
-  const router = useRouter();
+type MarkupTier = {
+  orgId: string;
+  minAmount: number;
+  maxAmount: number | null;
+  percent: number;
+  rank: number;
+};
+
+export default function EstimatePage() {
+  const params = useParams<{ id: string }>();
+  const projectId = params?.id;
 
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
   const [project, setProject] = useState<Project | null>(null);
   const [estimate, setEstimate] = useState<Estimate | null>(null);
   const [items, setItems] = useState<EstimateItem[]>([]);
-  const [orgSettings, setOrgSettings] = useState<OrgSettings | null>(null);
+  const [settings, setSettings] = useState<OrgSettings | null>(null);
+  const [tax, setTax] = useState<TaxScope | null>(null);
   const [tiers, setTiers] = useState<MarkupTier[]>([]);
-  const [taxScope, setTaxScope] = useState<TaxScope | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [saving, setSaving] = useState(false);
-  const [addForm, setAddForm] = useState({
-    kind: "OTHER",
-    description: "",
-    unit: "EA",
-    quantity: 1,
-    unitCost: 1,
-    markupPct: 0,
-    contingencyPct: 0,
-  });
 
-  // Load everything (project, estimate, items, org settings, tiers, tax)
   useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      setError(null);
-      setLoading(true);
-      try {
-        // Ensure user is signed in
-        const { data: me, error: meErr } = await supabase.auth.getUser();
-        if (meErr) throw meErr;
-        if (!me.user) {
-          // bounce to home
-          router.push("/");
-          return;
-        }
+    let isMounted = true;
 
+    async function load() {
+      setLoading(true);
+      setError(null);
+
+      try {
         // 1) Project
         const { data: p, error: pErr } = await supabase
-          .from<Project>("Project")
+          .from("Project")
           .select("*")
           .eq("id", projectId)
           .maybeSingle();
+
         if (pErr) throw pErr;
         if (!p) throw new Error("Project not found");
-        if (!cancelled) setProject(p);
+        if (!isMounted) return;
+        setProject(p as Project);
 
-        // 2) Org settings, tiers, tax
-        const [{ data: s, error: sErr }, { data: t, error: tErr }, { data: tax, error: taxErr }] =
-          await Promise.all([
-            supabase.from<OrgSettings>("OrgSettings").select("*").eq("orgId", p.orgId).maybeSingle(),
-            supabase
-              .from<MarkupTier>("MarkupTier")
-              .select("*")
-              .eq("orgId", p.orgId)
-              .order("rank", { ascending: true }),
-            supabase.from<TaxScope>("TaxScope").select("*").eq("orgId", p.orgId).maybeSingle(),
-          ]);
-        if (sErr) throw sErr;
-        if (tErr) throw tErr;
-        if (taxErr) throw taxErr;
-        if (!cancelled) {
-          setOrgSettings(s ?? null);
-          setTiers(t ?? []);
-          setTaxScope(tax ?? null);
-        }
-
-        // 3) Estimate (assume 1 per project in MVP)
-        const { data: e, error: eErr } = await supabase
-          .from<Estimate>("Estimate")
+        // 2) Latest Estimate for this project
+        const { data: est, error: estErr } = await supabase
+          .from("Estimate")
           .select("*")
-          .eq("projectId", p.id)
+          .eq("projectId", projectId)
           .order("createdat", { ascending: false })
-          .limit(1)
           .maybeSingle();
-        if (eErr) throw eErr;
-        if (!e) {
-          // No estimate yet – create one
-          const { data: created, error: cErr } = await supabase
-            .from<Estimate>("Estimate")
-            .insert({
-              projectId: p.id,
-              title: "Base Bid",
-              overheadPct: 0,
-              mobilizationCount: 1,
-              overtimeHoursPerDay: 0,
-              createdBy: me.user.id,
-            } as any)
+
+        if (estErr) throw estErr;
+        if (!isMounted) return;
+        setEstimate(est as Estimate | null);
+
+        // 3) Estimate items (ordered)
+        if (est?.id) {
+          const { data: its, error: itsErr } = await supabase
+            .from("EstimateItem")
             .select("*")
-            .single();
-          if (cErr) throw cErr;
-          if (!cancelled) setEstimate(created);
+            .eq("estimateId", est.id)
+            .order("rank", { ascending: true });
+
+          if (itsErr) throw itsErr;
+          if (!isMounted) return;
+          setItems((its as EstimateItem[]) ?? []);
         } else {
-          if (!cancelled) setEstimate(e);
+          setItems([]);
         }
 
-        // 4) Items
-        const estId = (e?.id) || (await supabase.from("Estimate").select("id").eq("projectId", p.id).single()).data.id;
-        const { data: it, error: itErr } = await supabase
-          .from<EstimateItem>("EstimateItem")
-          .select("*")
-          .eq("estimateId", estId)
-          .order("createdat", { ascending: true });
-        if (itErr) throw itErr;
-        if (!cancelled) setItems(it ?? []);
+        // 4) Org settings / tax / tiers (by project.orgId)
+        if (p?.orgId) {
+          const [{ data: s, error: sErr }, { data: t, error: tErr }, { data: tr, error: trErr }] =
+            await Promise.all([
+              supabase.from("OrgSettings").select("*").eq("orgId", p.orgId).maybeSingle(),
+              supabase.from("TaxScope").select("*").eq("orgId", p.orgId).maybeSingle(),
+              supabase.from("MarkupTier").select("*").eq("orgId", p.orgId).order("rank", { ascending: true }),
+            ]);
+
+          if (sErr) throw sErr;
+          if (tErr) throw tErr;
+          if (trErr) throw trErr;
+
+          if (!isMounted) return;
+          setSettings(s as OrgSettings | null);
+          setTax(t as TaxScope | null);
+          setTiers((tr as MarkupTier[]) ?? []);
+        } else {
+          setSettings(null);
+          setTax(null);
+          setTiers([]);
+        }
       } catch (err: any) {
-        if (!cancelled) setError(err?.message || String(err));
+        console.error("Estimate page load error:", err);
+        if (isMounted) setError(err?.message ?? String(err));
       } finally {
-        if (!cancelled) setLoading(false);
+        if (isMounted) setLoading(false);
       }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [projectId, router]);
-
-  // Totals
-  const totals = useMemo(() => {
-    if (!orgSettings) return null;
-    const useTiers = !!orgSettings.useMarkupTiers;
-    const contingencyOrder = orgSettings.contingencyOrder || "AFTER_MARKUP";
-
-    // per-line calcs & breakdown
-    let materials = 0, labor = 0, equipment = 0, markupAcc = 0, contingencyAcc = 0, other = 0;
-    let linesTotal = 0;
-
-    for (const li of items) {
-      const base = lineSubtotal(li.quantity, li.unitCost);
-      const res = withMarkupAndContingency(base, {
-        useMarkupTiers: useTiers,
-        tiers,
-        lineMarkupPct: li.markupPct || 0,
-        contingencyPct: li.contingencyPct || 0,
-        contingencyOrder,
-      });
-
-      // naive flags to drive tax breakdown
-      if (li.isMaterial) materials += base;
-      if (li.isLabor) labor += base;
-      if (li.isEquipment) equipment += base;
-      // we can’t perfectly split markup/contingency per category without more modeling;
-      // for tax purposes we track them globally
-      markupAcc += res.markup;
-      contingencyAcc += res.contingency;
-
-      linesTotal += res.total;
     }
 
-    // Mobilization
-    const mobRes = addMobilization(
-      linesTotal,
-      orgSettings.mobilizationPrice || 0,
-      estimate?.mobilizationCount || 0
-    );
+    if (projectId) {
+      load();
+    } else {
+      setLoading(false);
+      setError("Missing project id");
+    }
 
-    // Tax
-    const taxRes = applyTax(mobRes.totalWithMobilization, {
-      rate: taxScope?.rate || 0,
-      taxMaterials: !!taxScope?.taxMaterials,
-      taxLabor: !!taxScope?.taxLabor,
-      taxEquipment: !!taxScope?.taxEquipment,
-      taxMarkup: !!taxScope?.taxMarkup,
-      taxContingency: !!taxScope?.taxContingency,
-      taxableBreakdown: {
-        materials: round2(materials),
-        labor: round2(labor),
-        equipment: round2(equipment),
-        markup: round2(markupAcc),
-        contingency: round2(contingencyAcc),
-        other: round2(other),
-      },
-    });
+    return () => {
+      isMounted = false;
+    };
+  }, [projectId]);
+
+  const totals = useMemo(() => {
+    // very light placeholder calc; customize later or use your utils/estimate.ts functions
+    const subtotal = items.reduce((sum, it) => sum + (it.quantity ?? 0) * (it.unitCost ?? 0), 0);
+    const markupPct =
+      settings?.useMarkupTiers && tiers.length > 0
+        ? // pick first matching tier by subtotal
+          (() => {
+            const tier = tiers.find(
+              (t) => subtotal >= t.minAmount && (t.maxAmount == null || subtotal < t.maxAmount)
+            );
+            return (tier?.percent ?? 0) / 100;
+          })()
+        : (estimate?.markupPct ?? 0) / 100;
+
+    const contingencyPct = (estimate?.contingencyPct ?? settings?.defaultContingency ?? 0) / 100;
+
+    let afterMarkup = subtotal + subtotal * markupPct;
+    let afterContingency =
+      settings?.contingencyOrder === "BEFORE_MARKUP"
+        ? subtotal + subtotal * contingencyPct + subtotal * markupPct // contingency then markup
+        : afterMarkup + afterMarkup * contingencyPct; // markup then contingency
+
+    const mobilization = (settings?.mobilizationPrice ?? 0) * (estimate?.mobilizationCount ?? 0);
+
+    const taxRate = (tax?.rate ?? 0) / 100;
+    // naive tax: apply to whole afterContingency total if any of tax flags are set
+    const taxable =
+      tax?.taxMaterials || tax?.taxLabor || tax?.taxEquipment || tax?.taxMarkup || tax?.taxContingency
+        ? afterContingency
+        : 0;
+
+    const taxTotal = taxable * taxRate;
+
+    const grand = afterContingency + mobilization + taxTotal;
 
     return {
-      linesTotal: round2(linesTotal),
-      mobilization: mobRes.mobilization,
-      tax: taxRes.tax,
-      grandTotal: taxRes.totalWithTax,
+      subtotal,
+      markupPct: markupPct * 100,
+      contingencyPct: contingencyPct * 100,
+      afterContingency,
+      mobilization,
+      taxTotal,
+      grand,
     };
-  }, [items, orgSettings, tiers, estimate?.mobilizationCount, taxScope]);
-
-  async function addItem() {
-    if (!estimate) return;
-    setSaving(true);
-    setError(null);
-    try {
-      const payload = {
-        estimateId: estimate.id,
-        kind: addForm.kind as any,
-        description: addForm.description || "New item",
-        unit: addForm.unit,
-        quantity: Number(addForm.quantity) || 1,
-        unitCost: Number(addForm.unitCost) || 1,
-        markupPct: Number(addForm.markupPct) || 0,
-        contingencyPct: Number(addForm.contingencyPct) || 0,
-        durationHours: 0,
-        isMaterial: true,
-        isLabor: true,
-        isEquipment: false,
-      } satisfies Partial<EstimateItem> as any;
-
-      const { data, error: err } = await supabase
-        .from<EstimateItem>("EstimateItem")
-        .insert(payload)
-        .select("*")
-        .single();
-      if (err) throw err;
-      setItems((cur) => [...cur, data]);
-      setAddForm({
-        kind: "OTHER",
-        description: "",
-        unit: "EA",
-        quantity: 1,
-        unitCost: 1,
-        markupPct: 0,
-        contingencyPct: 0,
-      });
-    } catch (e: any) {
-      setError(e?.message || String(e));
-    } finally {
-      setSaving(false);
-    }
-  }
-
-  async function updateItem(id: string, patch: Partial<EstimateItem>) {
-    setItems((cur) => cur.map((x) => (x.id === id ? { ...x, ...patch } : x)));
-    const { error: err } = await supabase.from("EstimateItem").update(patch).eq("id", id);
-    if (err) {
-      // revert on error
-      await reloadItems();
-      alert("Save failed: " + err.message);
-    }
-  }
-
-  async function deleteItem(id: string) {
-    const old = items;
-    setItems((cur) => cur.filter((x) => x.id !== id));
-    const { error } = await supabase.from("EstimateItem").delete().eq("id", id);
-    if (error) {
-      setItems(old);
-      alert("Delete failed: " + error.message);
-    }
-  }
-
-  async function reloadItems() {
-    if (!estimate) return;
-    const { data, error } = await supabase
-      .from<EstimateItem>("EstimateItem")
-      .select("*")
-      .eq("estimateId", estimate.id)
-      .order("createdat", { ascending: true });
-    if (!error) setItems(data || []);
-  }
-
-  if (loading) return <div className="p-6">Loading…</div>;
-  if (error) return <div className="p-6 text-red-600">Error: {error}</div>;
-  if (!project || !estimate) return <div className="p-6">Not found.</div>;
+  }, [items, estimate, settings, tax, tiers]);
 
   return (
-    <div className="p-6 space-y-6">
-      <div className="flex items-center justify-between">
-        <div>
-          <Link href="/" className="text-blue-600 underline">Home</Link>
-          <div className="text-xs opacity-60">Build marker: BID-V1</div>
-          <h1 className="text-2xl font-semibold mt-1">{project.name}</h1>
-          <div className="text-sm opacity-70">{estimate.title}</div>
-        </div>
-        <div className="text-right">
-          <div className="text-sm opacity-60">Grand Total</div>
-          <div className="text-3xl font-bold">${totals ? totals.grandTotal.toLocaleString() : "-"}</div>
-          <div className="text-xs opacity-60">
-            Lines: ${totals?.linesTotal.toLocaleString()} • Mob: ${totals?.mobilization.toLocaleString()} • Tax: ${totals?.tax.toLocaleString()}
-          </div>
-        </div>
-      </div>
+    <div className="mx-auto max-w-4xl p-6">
+      {/* Build marker to help verify the deployed file */}
+      <div className="text-xs text-gray-500 mb-2">Build marker: PROJECT-ESTIMATE-V1</div>
 
-      {/* Add Line Item */}
-      <div className="border rounded-lg p-4">
-        <div className="font-medium mb-2">Add Line Item</div>
-        <div className="grid grid-cols-1 md:grid-cols-6 gap-2">
-          <select
-            className="border rounded px-2 py-1"
-            value={addForm.kind}
-            onChange={(e) => setAddForm((f) => ({ ...f, kind: e.target.value }))}
-          >
-            <option>SLAB</option>
-            <option>FOOTING</option>
-            <option>WALL</option>
-            <option>OTHER</option>
-          </select>
-          <input
-            className="border rounded px-2 py-1 md:col-span-2"
-            placeholder="Description"
-            value={addForm.description}
-            onChange={(e) => setAddForm((f) => ({ ...f, description: e.target.value }))}
-          />
-          <select
-            className="border rounded px-2 py-1"
-            value={addForm.unit}
-            onChange={(e) => setAddForm((f) => ({ ...f, unit: e.target.value }))}
-          >
-            <option>EA</option><option>SF</option><option>LF</option><option>CY</option>
-          </select>
-          <input
-            type="number" className="border rounded px-2 py-1"
-            value={addForm.quantity}
-            onChange={(e) => setAddForm((f) => ({ ...f, quantity: Number(e.target.value) }))}
-          />
-          <input
-            type="number" className="border rounded px-2 py-1"
-            value={addForm.unitCost}
-            onChange={(e) => setAddForm((f) => ({ ...f, unitCost: Number(e.target.value) }))}
-          />
-        </div>
-        <div className="grid grid-cols-1 md:grid-cols-6 gap-2 mt-2">
-          <input
-            type="number" className="border rounded px-2 py-1"
-            placeholder="Markup %"
-            value={addForm.markupPct}
-            onChange={(e) => setAddForm((f) => ({ ...f, markupPct: Number(e.target.value) }))}
-            disabled={orgSettings?.useMarkupTiers}
-          />
-          <input
-            type="number" className="border rounded px-2 py-1"
-            placeholder="Contingency %"
-            value={addForm.contingencyPct}
-            onChange={(e) => setAddForm((f) => ({ ...f, contingencyPct: Number(e.target.value) }))}
-          />
-          <div className="md:col-span-3" />
-          <button
-            className="border rounded px-3 py-1 bg-black text-white disabled:opacity-60"
-            onClick={addItem}
-            disabled={saving}
-          >
-            {saving ? "Adding…" : "Add Item"}
-          </button>
-        </div>
-        {orgSettings?.useMarkupTiers && (
-          <div className="text-xs mt-2 opacity-60">
-            Markup tiers ON. Per-line “Markup %” is ignored.
-          </div>
-        )}
-      </div>
+      <header className="flex items-center justify-between mb-4">
+        <nav className="text-sm">
+          <Link href="/" className="text-blue-600 hover:underline">
+            ← Home
+          </Link>
+        </nav>
+        <div className="text-lg font-semibold">Concrete Estimator</div>
+      </header>
 
-      {/* Items table */}
-      <div className="overflow-x-auto">
-        <table className="min-w-full border rounded-lg">
-          <thead className="bg-gray-50">
-            <tr>
-              <th className="text-left p-2">Kind</th>
-              <th className="text-left p-2">Description</th>
-              <th className="text-right p-2">Qty</th>
-              <th className="text-right p-2">Unit</th>
-              <th className="text-right p-2">Unit Cost</th>
-              <th className="text-right p-2">Markup %</th>
-              <th className="text-right p-2">Cont. %</th>
-              <th className="text-right p-2">Line Total</th>
-              <th className="p-2"></th>
-            </tr>
-          </thead>
-          <tbody>
-            {items.map((li) => {
-              const base = lineSubtotal(li.quantity, li.unitCost);
-              const res = withMarkupAndContingency(base, {
-                useMarkupTiers: !!orgSettings?.useMarkupTiers,
-                tiers,
-                lineMarkupPct: li.markupPct || 0,
-                contingencyPct: li.contingencyPct || 0,
-                contingencyOrder: orgSettings?.contingencyOrder || "AFTER_MARKUP",
-              });
+      {loading && <div>Loading…</div>}
+      {error && (
+        <div className="rounded-md border border-red-200 bg-red-50 p-3 text-sm text-red-800">
+          {error}
+        </div>
+      )}
 
-              return (
-                <tr key={li.id} className="border-t">
-                  <td className="p-2">{li.kind}</td>
-                  <td className="p-2">
-                    <input
-                      className="border rounded px-2 py-1 w-full"
-                      value={li.description}
-                      onChange={(e) => updateItem(li.id, { description: e.target.value })}
-                    />
-                  </td>
-                  <td className="p-2 text-right">
-                    <input
-                      type="number"
-                      className="border rounded px-2 py-1 w-24 text-right"
-                      value={li.quantity}
-                      onChange={(e) => updateItem(li.id, { quantity: Number(e.target.value) })}
-                    />
-                  </td>
-                  <td className="p-2 text-right">
-                    <input
-                      className="border rounded px-2 py-1 w-20 text-right"
-                      value={li.unit}
-                      onChange={(e) => updateItem(li.id, { unit: e.target.value })}
-                    />
-                  </td>
-                  <td className="p-2 text-right">
-                    <input
-                      type="number"
-                      className="border rounded px-2 py-1 w-28 text-right"
-                      value={li.unitCost}
-                      onChange={(e) => updateItem(li.id, { unitCost: Number(e.target.value) })}
-                    />
-                  </td>
-                  <td className="p-2 text-right">
-                    <input
-                      type="number"
-                      className="border rounded px-2 py-1 w-24 text-right disabled:opacity-50"
-                      value={li.markupPct}
-                      onChange={(e) => updateItem(li.id, { markupPct: Number(e.target.value) })}
-                      disabled={!!orgSettings?.useMarkupTiers}
-                    />
-                  </td>
-                  <td className="p-2 text-right">
-                    <input
-                      type="number"
-                      className="border rounded px-2 py-1 w-24 text-right"
-                      value={li.contingencyPct}
-                      onChange={(e) => updateItem(li.id, { contingencyPct: Number(e.target.value) })}
-                    />
-                  </td>
-                  <td className="p-2 text-right font-medium">${res.total.toLocaleString()}</td>
-                  <td className="p-2 text-right">
-                    <button
-                      className="text-red-600 underline"
-                      onClick={() => deleteItem(li.id)}
-                    >
-                      Delete
-                    </button>
-                  </td>
-                </tr>
-              );
-            })}
-            {!items.length && (
-              <tr>
-                <td className="p-4 text-center opacity-60" colSpan={9}>
-                  No items yet. Add your first line above.
-                </td>
-              </tr>
+      {!loading && !error && project && (
+        <div className="space-y-8">
+          <section className="rounded-lg border p-4">
+            <h1 className="text-2xl font-bold">{project.name}</h1>
+            <p className="text-sm text-gray-600">
+              Client: {project.clientName ?? "—"} • Location: {project.location ?? "—"}
+            </p>
+            <p className="text-xs text-gray-400 mt-1">Project ID: {project.id}</p>
+          </section>
+
+          <section className="rounded-lg border p-4">
+            <h2 className="text-xl font-semibold mb-2">
+              {estimate ? estimate.title : "No estimate yet"}
+            </h2>
+            {estimate ? (
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm">
+                <div>
+                  <div className="text-gray-500">Overhead %</div>
+                  <div>{estimate.overheadPct ?? 0}%</div>
+                </div>
+                <div>
+                  <div className="text-gray-500">Mobilization Count</div>
+                  <div>{estimate.mobilizationCount ?? 0}</div>
+                </div>
+                <div>
+                  <div className="text-gray-500">Overtime Hours / Day</div>
+                  <div>{estimate.overtimeHoursPerDay ?? 0}</div>
+                </div>
+                <div>
+                  <div className="text-gray-500">Created</div>
+                  <div>{estimate.createdat ? new Date(estimate.createdat).toLocaleString() : "—"}</div>
+                </div>
+              </div>
+            ) : (
+              <p className="text-sm text-gray-600">Create an estimate to get started.</p>
             )}
-          </tbody>
-        </table>
-      </div>
+          </section>
 
-      {/* Footer totals */}
-      <div className="border rounded-lg p-4 text-right">
-        <div>Subtotal (lines): <b>${totals?.linesTotal.toLocaleString()}</b></div>
-        <div>Mobilization: <b>${totals?.mobilization.toLocaleString()}</b></div>
-        <div>Tax: <b>${totals?.tax.toLocaleString()}</b></div>
-        <div className="text-xl mt-1">Grand Total: <b>${totals?.grandTotal.toLocaleString()}</b></div>
-      </div>
+          <section className="rounded-lg border p-4">
+            <h3 className="text-lg font-semibold mb-2">Line Items</h3>
+            {items.length === 0 ? (
+              <div className="text-sm text-gray-600">No items yet.</div>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="min-w-full text-sm">
+                  <thead>
+                    <tr className="text-left border-b">
+                      <th className="py-2 pr-3">#</th>
+                      <th className="py-2 pr-3">Kind</th>
+                      <th className="py-2 pr-3">Description</th>
+                      <th className="py-2 pr-3">Unit</th>
+                      <th className="py-2 pr-3">Qty</th>
+                      <th className="py-2 pr-3">Unit Cost</th>
+                      <th className="py-2 pr-3">Cost</th>
+                      <th className="py-2 pr-3">Flags</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {items.map((it, idx) => {
+                      const cost = (it.quantity ?? 0) * (it.unitCost ?? 0);
+                      return (
+                        <tr key={it.id} className="border-b last:border-0">
+                          <td className="py-2 pr-3">{it.rank ?? idx + 1}</td>
+                          <td className="py-2 pr-3">{it.kind}</td>
+                          <td className="py-2 pr-3">{it.description}</td>
+                          <td className="py-2 pr-3">{it.unit}</td>
+                          <td className="py-2 pr-3">{it.quantity}</td>
+                          <td className="py-2 pr-3">${(it.unitCost ?? 0).toFixed(2)}</td>
+                          <td className="py-2 pr-3 font-medium">${cost.toFixed(2)}</td>
+                          <td className="py-2 pr-3">
+                            {(it.isMaterial ? "M" : "") +
+                              (it.isLabor ? " L" : "") +
+                              (it.isEquipment ? " E" : "")}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </section>
+
+          <section className="rounded-lg border p-4">
+            <h3 className="text-lg font-semibold mb-2">Totals (quick view)</h3>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm">
+              <div>
+                <div className="text-gray-500">Subtotal</div>
+                <div>${totals.subtotal.toFixed(2)}</div>
+              </div>
+              <div>
+                <div className="text-gray-500">Markup %</div>
+                <div>{totals.markupPct.toFixed(2)}%</div>
+              </div>
+              <div>
+                <div className="text-gray-500">Contingency %</div>
+                <div>{totals.contingencyPct.toFixed(2)}%</div>
+              </div>
+              <div>
+                <div className="text-gray-500">After Contingency</div>
+                <div>${totals.afterContingency.toFixed(2)}</div>
+              </div>
+              <div>
+                <div className="text-gray-500">Mobilization</div>
+                <div>${totals.mobilization.toFixed(2)}</div>
+              </div>
+              <div>
+                <div className="text-gray-500">Tax</div>
+                <div>${totals.taxTotal.toFixed(2)}</div>
+              </div>
+              <div className="sm:col-span-2 pt-1 border-t">
+                <div className="text-gray-500">Grand Total</div>
+                <div className="text-base font-semibold">${totals.grand.toFixed(2)}</div>
+              </div>
+            </div>
+          </section>
+
+          <section className="rounded-lg border p-4 text-xs text-gray-500">
+            <div>Org Settings: {settings ? "loaded" : "—"} • Tax Scope: {tax ? "loaded" : "—"} • Tiers: {tiers.length}</div>
+          </section>
+        </div>
+      )}
     </div>
   );
 }
