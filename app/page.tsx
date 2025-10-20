@@ -3,15 +3,12 @@
 import { useEffect, useState } from "react";
 import { supabase } from "../lib/supabaseClient";
 
-/**
- * DB row shape used on Home
- * NOTE: in your DB the column name is `createdat` (all lowercase).
- */
+/** NOTE: DB column is `createdat` (all lowercase) */
 type ProjectRow = {
   id: string;
   name: string;
   orgId: string;
-  createdat: string | null; // from Postgres
+  createdat: string | null;
 };
 
 export default function Home() {
@@ -24,7 +21,7 @@ export default function Home() {
     setLoading(true);
     setErrMsg(null);
     try {
-      // 1) Auth user
+      // 1) Current auth user
       const { data: auth, error: authErr } = await supabase.auth.getUser();
       if (authErr) throw authErr;
       const user = auth.user ?? null;
@@ -41,7 +38,6 @@ export default function Home() {
         .from("Membership")
         .select("orgId")
         .eq("userId", user.id);
-
       if (memErr) throw memErr;
 
       const orgIds = (memberships ?? []).map((m: any) => m.orgId).filter(Boolean);
@@ -52,38 +48,25 @@ export default function Home() {
         return;
       }
 
-      // 3) Projects within those orgs
-      // IMPORTANT: your DB column is `createdat` (lowercase). Ordering on `createdAt` causes a 400.
-      let proj: ProjectRow[] | null = null;
-
-      const { data, error } = await supabase
+      // 3) Fetch projects WITHOUT server-side order (avoid createdAt/createdat mismatch)
+      const { data: projData, error: projErr } = await supabase
         .from("Project")
         .select("id, name, orgId, createdat")
         .in("orgId", orgIds)
-        .order("createdat", { ascending: false }) // correct column name
         .limit(50);
 
-      if (error) {
-        // As a safety net, retry without order then sort on the client
-        const retry = await supabase
-          .from("Project")
-          .select("id, name, orgId, createdat")
-          .in("orgId", orgIds)
-          .limit(50);
+      if (projErr) throw projErr;
 
-        if (retry.error) throw retry.error;
+      // Sort on the client by `createdat` DESC
+      const sorted = (projData ?? []).sort((a: ProjectRow, b: ProjectRow) => {
+        const at = a.createdat ?? "";
+        const bt = b.createdat ?? "";
+        return at === bt ? 0 : at < bt ? 1 : -1; // newest first
+      });
 
-        proj = (retry.data ?? []).sort((a: ProjectRow, b: ProjectRow) => {
-          const aT = a.createdat ?? "";
-          const bT = b.createdat ?? "";
-          return aT === bT ? 0 : aT < bT ? 1 : -1; // descending
-        });
-      } else {
-        proj = data ?? [];
-      }
-
-      setProjects(proj ?? []);
+      setProjects(sorted);
     } catch (e: any) {
+      console.error("Home load error:", e);
       setErrMsg(e?.message || String(e));
       setProjects([]);
     } finally {
@@ -95,7 +78,7 @@ export default function Home() {
     load();
   }, []);
 
-  const buildMarker = "HOME-V3"; // shows which build you’re on
+  const buildMarker = "HOME-V3-NO-SERVER-ORDER";
 
   return (
     <main style={{ maxWidth: 900, margin: "0 auto", padding: "2rem 1rem" }}>
