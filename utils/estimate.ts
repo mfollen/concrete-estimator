@@ -1,58 +1,149 @@
-export type Item = { quantity: number; unitCost: number; markupPct: number; isMaterial?: boolean; isLabor?: boolean; isEquipment?: boolean; };
-export type MarkupTier = { minAmount: number; maxAmount?: number | null; percent: number; rank: number };
+// utils/estimate.ts
+export type Money = number;
+export type Unit = "SF" | "LF" | "CY" | "EA";
 
-const pct = (n:number, p:number)=> (n * p) / 100;
-const sum = (a:number[])=> a.reduce((x,y)=>x+y,0);
+export type MarkupTier = {
+  minAmount: number; // inclusive
+  maxAmount: number | null; // null = no upper limit
+  percent: number; // e.g. 20 = 20%
+  rank: number;
+};
 
-export function pickTier(tiers: MarkupTier[], lineBase: number): number {
-  const sorted = [...tiers].sort((a,b)=> a.rank - b.rank);
-  const tier = sorted.find(t => lineBase >= t.minAmount && (t.maxAmount == null || lineBase < t.maxAmount));
-  return tier ? tier.percent : 0;
+export function round2(n: number): number {
+  return Math.round((n + Number.EPSILON) * 100) / 100;
 }
 
-export function totals(opts: {
-  items: Item[]; overheadPct: number; useMarkupTiers: boolean; tiers?: MarkupTier[];
-  contingencyPct: number; contingencyOrder: "BEFORE_MARKUP" | "AFTER_MARKUP";
-  taxRate: number; taxScope: { materials: boolean; labor: boolean; equipment: boolean; markup: boolean; contingency: boolean };
-  mobilization: { count: number; price: number };
-}) {
-  const { items, overheadPct, useMarkupTiers, tiers = [], contingencyPct, contingencyOrder, taxRate, taxScope, mobilization } = opts;
-  const lineBases = items.map(i => i.quantity * i.unitCost);
-  const direct = sum(lineBases);
-  const overhead = pct(direct, overheadPct);
+export function applyMarkupTiers(
+  base: Money,
+  tiers: MarkupTier[]
+): { markup: Money; effectivePct: number } {
+  if (!tiers?.length) return { markup: 0, effectivePct: 0 };
 
-  const lineMarkups = items.map((i, idx) => {
-    if (useMarkupTiers) {
-      const tierPct = pickTier(tiers, lineBases[idx]);
-      return pct(lineBases[idx], tierPct);
-    } else {
-      return pct(lineBases[idx], i.markupPct);
+  // Sort tiers by rank (1,2,3…)
+  const sorted = [...tiers].sort((a, b) => a.rank - b.rank);
+
+  let remaining = base;
+  let markup = 0;
+
+  for (const t of sorted) {
+    if (remaining <= 0) break;
+
+    const low = t.minAmount ?? 0;
+    const high = t.maxAmount ?? Number.POSITIVE_INFINITY;
+    const slice = Math.max(0, Math.min(remaining, high - low));
+    if (slice > 0) {
+      markup += slice * (t.percent / 100);
+      remaining -= slice;
     }
-  });
-  const markup = sum(lineMarkups);
-
-  const mobilizationCost = (mobilization?.count||0) * (mobilization?.price||0);
-
-  let baseBeforeCont = direct + overhead + markup + mobilizationCost;
-  let contingency = 0;
-  if (contingencyOrder === "BEFORE_MARKUP") {
-    const pre = direct + overhead + mobilizationCost;
-    contingency = pct(pre, contingencyPct);
-    baseBeforeCont = pre + contingency + markup;
-  } else {
-    contingency = pct(baseBeforeCont, contingencyPct);
-    baseBeforeCont += contingency;
   }
 
+  const effectivePct = base > 0 ? (markup / base) * 100 : 0;
+  return { markup: round2(markup), effectivePct: round2(effectivePct) };
+}
+
+export function lineSubtotal(
+  quantity: number,
+  unitCost: number
+): Money {
+  return round2(quantity * unitCost);
+}
+
+export function withMarkupAndContingency(
+  base: Money,
+  options: {
+    useMarkupTiers: boolean;
+    tiers: MarkupTier[];
+    lineMarkupPct?: number; // per-line override when tiers are OFF
+    contingencyPct?: number; // per-line contingency
+    contingencyOrder: "AFTER_MARKUP" | "BEFORE_MARKUP";
+  }
+) {
+  const { useMarkupTiers, tiers, lineMarkupPct = 0, contingencyPct = 0, contingencyOrder } =
+    options;
+
+  let subtotal = base;
+  let markup = 0;
+
+  if (useMarkupTiers) {
+    const res = applyMarkupTiers(subtotal, tiers);
+    markup = res.markup;
+  } else {
+    markup = round2(subtotal * (lineMarkupPct / 100));
+  }
+
+  let afterMarkup = subtotal + markup;
+
+  let contingency = 0;
+  if (contingencyOrder === "BEFORE_MARKUP") {
+    // contingency applied to base; then markup applied to (base+contingency)
+    const pre = round2(subtotal * (contingencyPct / 100));
+    const newBase = subtotal + pre;
+    let mk = 0;
+    if (useMarkupTiers) mk = applyMarkupTiers(newBase, tiers).markup;
+    else mk = round2(newBase * (lineMarkupPct / 100));
+    return {
+      base: subtotal,
+      contingency: pre,
+      markup: mk,
+      total: round2(newBase + mk),
+    };
+  } else {
+    contingency = round2(afterMarkup * (contingencyPct / 100));
+    return {
+      base: subtotal,
+      contingency,
+      markup,
+      total: round2(afterMarkup + contingency),
+    };
+  }
+}
+
+export function addMobilization(
+  currentTotal: Money,
+  mobilizationPrice: Money,
+  mobilizationCount: number
+) {
+  const mob = round2(mobilizationPrice * (mobilizationCount || 0));
+  return { mobilization: mob, totalWithMobilization: round2(currentTotal + mob) };
+}
+
+export function applyTax(
+  currentTotal: Money,
+  tax: {
+    rate: number; // e.g. 6.25 => 6.25%
+    taxMaterials: boolean;
+    taxLabor: boolean;
+    taxEquipment: boolean;
+    taxMarkup: boolean;
+    taxContingency: boolean;
+    taxableBreakdown: {
+      materials: Money;
+      labor: Money;
+      equipment: Money;
+      markup: Money;
+      contingency: Money;
+      other: Money;
+    };
+  }
+) {
+  const {
+    rate,
+    taxMaterials,
+    taxLabor,
+    taxEquipment,
+    taxMarkup,
+    taxContingency,
+    taxableBreakdown,
+  } = tax;
+
+  const rateDec = rate / 100;
   let taxable = 0;
-  if (taxScope.materials) taxable += sum(items.map((i,idx)=> i.isMaterial ? lineBases[idx] : 0));
-  if (taxScope.labor) taxable += sum(items.map((i,idx)=> i.isLabor ? lineBases[idx] : 0));
-  if (taxScope.equipment) taxable += sum(items.map((i,idx)=> i.isEquipment ? lineBases[idx] : 0)) + mobilizationCost;
-  if (taxScope.markup) taxable += markup;
-  if (taxScope.contingency) taxable += contingency;
+  if (taxMaterials) taxable += taxableBreakdown.materials;
+  if (taxLabor) taxable += taxableBreakdown.labor;
+  if (taxEquipment) taxable += taxableBreakdown.equipment;
+  if (taxMarkup) taxable += taxableBreakdown.markup;
+  if (taxContingency) taxable += taxableBreakdown.contingency;
 
-  const tax = pct(taxable, taxRate);
-  const grand = baseBeforeCont + tax;
-
-  return { direct, overhead, markup, mobilization: mobilizationCost, contingency, tax, grand };
+  const taxAmt = round2(taxable * rateDec);
+  return { tax: taxAmt, totalWithTax: round2(currentTotal + taxAmt) };
 }
