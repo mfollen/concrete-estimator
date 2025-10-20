@@ -3,7 +3,6 @@
 import { useEffect, useState } from "react";
 import { supabase } from "../lib/supabaseClient";
 
-/** NOTE: DB column is `createdat` (lowercase) */
 type ProjectRow = {
   id: string;
   name: string;
@@ -14,18 +13,21 @@ type ProjectRow = {
 export default function Home() {
   const [loading, setLoading] = useState(true);
   const [meEmail, setMeEmail] = useState<string | null>(null);
+  const [meId, setMeId] = useState<string | null>(null);          // DEBUG: show user id
   const [projects, setProjects] = useState<ProjectRow[]>([]);
   const [errMsg, setErrMsg] = useState<string | null>(null);
+  const [debug, setDebug] = useState<any>(null);                   // DEBUG: dump RPC payload
 
   async function load() {
     setLoading(true);
     setErrMsg(null);
+    setDebug(null);
     try {
-      // 1) Current auth user
       const { data: auth, error: authErr } = await supabase.auth.getUser();
       if (authErr) throw authErr;
       const user = auth.user ?? null;
       setMeEmail(user?.email ?? null);
+      setMeId(user?.id ?? null);
 
       if (!user) {
         setProjects([]);
@@ -33,12 +35,15 @@ export default function Home() {
         return;
       }
 
-      // 2) Fetch via RPC to avoid any URL order params
+      // RPC — no URL order params
       const { data, error } = await supabase.rpc("list_user_projects", {
         p_user_id: user.id,
       });
 
       if (error) throw error;
+
+      // DEBUG: show raw response
+      setDebug({ rpcCount: (data ?? []).length, rows: data });
 
       setProjects((data ?? []) as ProjectRow[]);
     } catch (e: any) {
@@ -54,7 +59,7 @@ export default function Home() {
     load();
   }, []);
 
-  const buildMarker = "HOME-V4-RPC";
+  const buildMarker = "HOME-V4-RPC+DEBUG";
 
   return (
     <main style={{ maxWidth: 900, margin: "0 auto", padding: "2rem 1rem" }}>
@@ -68,6 +73,21 @@ export default function Home() {
 
       <div style={{ marginBottom: 8, opacity: 0.6 }}>Build marker: {buildMarker}</div>
 
+      {/* DEBUG PANEL */}
+      <details style={{ marginBottom: 12 }}>
+        <summary>Debug</summary>
+        <div style={{ fontSize: 13, paddingTop: 8 }}>
+          <div><b>userId:</b> {meId ?? "(not signed in)"}</div>
+          <div><b>email:</b> {meEmail ?? "-"}</div>
+          <div><b>projects count:</b> {projects.length}</div>
+          {errMsg && <div style={{ color: "crimson" }}><b>error:</b> {errMsg}</div>}
+          <pre style={{ background: "#f7f7f7", padding: 8, borderRadius: 6, overflow: "auto" }}>
+            {JSON.stringify(debug, null, 2)}
+          </pre>
+          <button onClick={load} style={{ marginTop: 6 }}>Reload</button>
+        </div>
+      </details>
+
       {!meEmail ? (
         <>
           <h1>Sign in to Concrete Estimator</h1>
@@ -79,13 +99,6 @@ export default function Home() {
 
           {loading && <p>Loading your projects…</p>}
 
-          {errMsg && (
-            <p style={{ color: "crimson" }}>
-              Couldn’t load projects: {errMsg}{" "}
-              <button onClick={load} style={{ marginLeft: 8 }}>Retry</button>
-            </p>
-          )}
-
           {!loading && !errMsg && projects.length === 0 && (
             <div style={{ marginTop: 16 }}>
               <p>No projects yet.</p>
@@ -93,6 +106,13 @@ export default function Home() {
                 Go to <a href="/settings">Settings</a> and click <em>Initialize Demo Data</em>.
               </p>
             </div>
+          )}
+
+          {errMsg && (
+            <p style={{ color: "crimson" }}>
+              Couldn’t load projects: {errMsg}{" "}
+              <button onClick={load} style={{ marginLeft: 8 }}>Retry</button>
+            </p>
           )}
 
           {!loading && projects.length > 0 && (
@@ -124,7 +144,6 @@ export default function Home() {
   );
 }
 
-/** Simple email-only magic link sign-in form */
 function SignInForm() {
   const [email, setEmail] = useState("");
   const [sending, setSending] = useState(false);
