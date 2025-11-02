@@ -23,7 +23,12 @@ type Estimate = {
   mobilizationCount?: number | null;
   overtimeHoursPerDay?: number | null;
   createdat?: string | null;
+
+  // ✅ add these two lines:
+  markupPct?: number | null;
+  contingencyPct?: number | null;
 };
+
 
 type EstimateItem = {
   id: string;
