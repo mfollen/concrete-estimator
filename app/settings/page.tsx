@@ -144,15 +144,23 @@ export default function Settings() {
 
       await ensureDefaults(orgId!);
 
-      const [{ data: S }, { data: T }, { data: MK }] = await Promise.all([
-        supabase.from("OrgSettings").select("*").eq('"orgId"', orgId!).single(),
-        supabase.from("TaxScope").select("*").eq('"orgId"', orgId!).single(),
-        supabase.from("MarkupTier").select("*").eq('"orgId"', orgId!).order("rank", { ascending: true }),
-      ]);
+const [{ data: S }, { data: T }, { data: MK }] = await Promise.all([
+  supabase.from("OrgSettings").select("*").eq('"orgId"', orgId!).single(),
+  supabase.from("TaxScope").select("*").eq('"orgId"', orgId!).single(),
+  // ⬇️ no .order("rank") here — PostgREST rank() trap
+  supabase.from("MarkupTier").select("*").eq('"orgId"', orgId!),
+]);
 
-      setSettings(S);
-      setTax(T);
-      setTiers((MK || []) as any[]);
+setSettings(S);
+setTax(T);
+
+// sort client-side by rank (nulls treated as 0)
+const sortedTiers = ((MK as any[]) ?? [])
+  .slice()
+  .sort((a, b) => (a?.rank ?? 0) - (b?.rank ?? 0));
+
+setTiers(sortedTiers);
+
     } catch (e: any) {
       console.error(e);
       setErrorText(e?.message || "Failed to load organization settings.");
