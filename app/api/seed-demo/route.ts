@@ -5,6 +5,12 @@ import { createClient } from "@supabase/supabase-js";
 // If your org table is named differently, change this:
 const ORG_TABLE = "Org";
 
+// ---- Types for helper returns (to satisfy isolatedModules) ----
+type OrgResult = { orgId: string; created: boolean };
+type ProjectResult = { projectId: string; created: boolean };
+type EstimateResult = { estimateId: string; created: boolean };
+type ItemsResult = { inserted: number; skipped: boolean };
+
 const DEMO = {
   ORG_NAME: "Demo Org",
   PROJECT_NAME: "Warehouse Expansion",
@@ -17,8 +23,8 @@ const DEMO = {
   ] as const,
   ORG_SETTINGS: {
     useMarkupTiers: true,
-    defaultContingency: 5, // percent — your page treats values as % then /100 later
-    contingencyOrder: "AFTER_MARKUP", // UPPERCASE to match your page.tsx logic
+    defaultContingency: 5,            // percent (UI divides by 100 where needed)
+    contingencyOrder: "AFTER_MARKUP", // uppercase to match your page.tsx logic
     mobilizationPrice: 2500,
     mobilizationAutoPerCrewDay: false,
     crewHoursPerDay: 10,
@@ -26,7 +32,7 @@ const DEMO = {
     validityDays: 30,
   },
   TAX_SCOPE: {
-    rate: 7.5, // percent (your page divides by 100)
+    rate: 7.5, // percent (UI divides by 100)
     taxMaterials: true,
     taxLabor: false,
     taxEquipment: true,
@@ -34,15 +40,15 @@ const DEMO = {
     taxContingency: false,
   },
   MARKUP_TIERS: [
-    { rank: 1, minAmount: 0, maxAmount: 10000, percent: 15 },
+    { rank: 1, minAmount: 0,     maxAmount: 10000, percent: 15 },
     { rank: 2, minAmount: 10000, maxAmount: 50000, percent: 12 },
-    { rank: 3, minAmount: 50000, maxAmount: null, percent: 10 },
+    { rank: 3, minAmount: 50000, maxAmount: null,  percent: 10 },
   ] as const,
   ESTIMATE_DEFAULTS: {
     overheadPct: 0,
     mobilizationCount: 1,
     overtimeHoursPerDay: 0,
-    markupPct: 12, // used when useMarkupTiers=false
+    markupPct: 12,     // used if tiers disabled
     contingencyPct: 5, // percent
   },
 };
@@ -54,8 +60,8 @@ function getServerSupabase(): Supa {
   return createClient(url, key, { auth: { persistSession: false } });
 }
 
-async function findOrCreateOrg(supabase: Supa, userId: string) {
-  // Reuse any org through membership first
+async function findOrCreateOrg(supabase: Supa, userId: string): Promise<OrgResult> {
+  // Reuse any org through membership
   const { data: membership, error: membershipErr } = await supabase
     .from("Membership")
     .select("orgId")
@@ -75,9 +81,10 @@ async function findOrCreateOrg(supabase: Supa, userId: string) {
   if (findErr) throw findErr;
 
   if (found?.id) {
-    await supabase
+    const { error: upErr } = await supabase
       .from("Membership")
       .upsert([{ userId, orgId: found.id, role: "OWNER" }], { onConflict: "userId,orgId" });
+    if (upErr) throw upErr;
     return { orgId: found.id, created: false };
   }
 
@@ -97,7 +104,7 @@ async function findOrCreateOrg(supabase: Supa, userId: string) {
   return { orgId: created.id, created: true };
 }
 
-async function upsertOrgSettings(supabase: Supa, orgId: string) {
+async function upsertOrgSettings(supabase: Supa, orgId: string): Promise<void> {
   const { error } = await supabase.from("OrgSettings").upsert(
     [{ orgId, ...DEMO.ORG_SETTINGS }],
     { onConflict: "orgId" }
@@ -105,7 +112,7 @@ async function upsertOrgSettings(supabase: Supa, orgId: string) {
   if (error) throw error;
 }
 
-async function upsertTaxScope(supabase: Supa, orgId: string) {
+async function upsertTaxScope(supabase: Supa, orgId: string): Promise<void> {
   const { error } = await supabase.from("TaxScope").upsert(
     [{ orgId, ...DEMO.TAX_SCOPE }],
     { onConflict: "orgId" }
@@ -113,7 +120,7 @@ async function upsertTaxScope(supabase: Supa, orgId: string) {
   if (error) throw error;
 }
 
-async function upsertMarkupTiers(supabase: Supa, orgId: string) {
+async function upsertMarkupTiers(supabase: Supa, orgId: string): Promise<void> {
   const { error: delErr } = await supabase.from("MarkupTier").delete().eq("orgId", orgId);
   if (delErr) throw delErr;
 
@@ -128,7 +135,7 @@ async function upsertMarkupTiers(supabase: Supa, orgId: string) {
   if (error) throw error;
 }
 
-async function findOrCreateProject(supabase: Supa, orgId: string) {
+async function findOrCreateProject(supabase: Supa, orgId: string): Promise<ProjectResult> {
   const { data: existing, error: findErr } = await supabase
     .from("Project")
     .select("id")
@@ -150,7 +157,7 @@ async function findOrCreateProject(supabase: Supa, orgId: string) {
   return { projectId: created.id, created: true };
 }
 
-async function findOrCreateEstimate(supabase: Supa, projectId: string) {
+async function findOrCreateEstimate(supabase: Supa, projectId: string): Promise<EstimateResult> {
   const { data: existing, error: findErr } = await supabase
     .from("Estimate")
     .select("id")
@@ -172,13 +179,15 @@ async function findOrCreateEstimate(supabase: Supa, projectId: string) {
   return { estimateId: created.id, created: true };
 }
 
-async function seedItemsIfEmpty(supabase: Supa, estimateId: string) {
+async function seedItemsIfEmpty(supabase: Supa, estimateId: string): Promise<ItemsResult> {
   const { count, error: countErr } = await supabase
     .from("EstimateItem")
     .select("*", { count: "exact", head: true })
     .eq("estimateId", estimateId);
   if (countErr) throw countErr;
-  if ((count ?? 0) > 0) return { inserted: 0, skipped: true };
+
+  const num = (count ?? 0) as number;
+  if (num > 0) return { inserted: 0, skipped: true };
 
   const rows = DEMO.ITEMS.map(it => ({
     estimateId,
@@ -203,9 +212,9 @@ async function seedItemsIfEmpty(supabase: Supa, estimateId: string) {
 
 export async function POST(req: Request) {
   try {
-    const supabase = getServerSupabase();
-    const body = await req.json().catch(() => ({}));
-    const userId: string | undefined = body.userId;
+    // parse body in a way TS is happy with
+    const body: unknown = await req.json().catch(() => ({}));
+    const userId = (body as { userId?: string })?.userId;
 
     if (!userId) {
       return NextResponse.json(
@@ -213,6 +222,8 @@ export async function POST(req: Request) {
         { status: 400 }
       );
     }
+
+    const supabase = getServerSupabase();
 
     const orgRes = await findOrCreateOrg(supabase, userId);
     await upsertOrgSettings(supabase, orgRes.orgId);
