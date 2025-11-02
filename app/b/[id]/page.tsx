@@ -120,25 +120,32 @@ export default function EstimatePage() {
         if (!isMounted) return;
         setEstimate(est as Estimate | null);
 
-        // 3) Estimate items (client-side ordered by rank to avoid PostgREST rank() trap)
-        if (est?.id) {
-          const { data: its, error: itsErr } = await supabase
-            .from("EstimateItem")
-            .select("*")
-            .eq("estimateId", est.id);
+// 3) Estimate items via RPC (no ORDER BY in SQL; sort in JS)
+if (est?.id) {
+  const { data: its, error: itsErr } = await supabase
+    .rpc("list_estimate_items", { p_estimate_id: est.id });
 
-          if (itsErr) throw itsErr;
-          if (!isMounted) return;
+  if (itsErr) throw itsErr;
+  if (!isMounted) return;
 
-          const sorted = (its ?? [])
-            .slice()
-            .sort((a: any, b: any) => (a?.rank ?? 0) - (b?.rank ?? 0));
+  const sorted = ((its as any[]) ?? [])
+    .slice()
+    // sort by rank if present, then id as a stable tie-breaker
+    .sort((a, b) => {
+      const ra = a?.rank ?? 0;
+      const rb = b?.rank ?? 0;
+      if (ra !== rb) return ra - rb;
+      const ida = String(a?.id ?? "");
+      const idb = String(b?.id ?? "");
+      return ida.localeCompare(idb);
+    });
 
-          setItems(sorted as EstimateItem[]);
-        } else {
-          if (!isMounted) return;
-          setItems([]);
-        }
+  setItems(sorted as EstimateItem[]);
+} else {
+  if (!isMounted) return;
+  setItems([]);
+}
+
 
         // 4) Org settings / tax / tiers (by project.orgId)
         if (p?.orgId) {
