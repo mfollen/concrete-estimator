@@ -22,13 +22,10 @@ type Estimate = {
   overheadPct?: number | null;
   mobilizationCount?: number | null;
   overtimeHoursPerDay?: number | null;
-  createdat?: string | null;
-
-  // ✅ add these two lines:
   markupPct?: number | null;
   contingencyPct?: number | null;
+  createdat?: string | null;
 };
-
 
 type EstimateItem = {
   id: string;
@@ -123,18 +120,23 @@ export default function EstimatePage() {
         if (!isMounted) return;
         setEstimate(est as Estimate | null);
 
-        // 3) Estimate items (ordered)
+        // 3) Estimate items (client-side ordered by rank to avoid PostgREST rank() trap)
         if (est?.id) {
           const { data: its, error: itsErr } = await supabase
             .from("EstimateItem")
             .select("*")
-            .eq("estimateId", est.id)
-            .order("rank", { ascending: true });
+            .eq("estimateId", est.id);
 
           if (itsErr) throw itsErr;
           if (!isMounted) return;
-          setItems((its as EstimateItem[]) ?? []);
+
+          const sorted = (its ?? [])
+            .slice()
+            .sort((a: any, b: any) => (a?.rank ?? 0) - (b?.rank ?? 0));
+
+          setItems(sorted as EstimateItem[]);
         } else {
+          if (!isMounted) return;
           setItems([]);
         }
 
@@ -144,7 +146,8 @@ export default function EstimatePage() {
             await Promise.all([
               supabase.from("OrgSettings").select("*").eq("orgId", p.orgId).maybeSingle(),
               supabase.from("TaxScope").select("*").eq("orgId", p.orgId).maybeSingle(),
-              supabase.from("MarkupTier").select("*").eq("orgId", p.orgId).order("rank", { ascending: true }),
+              // no .order("rank") here; sort after fetch
+              supabase.from("MarkupTier").select("*").eq("orgId", p.orgId),
             ]);
 
           if (sErr) throw sErr;
@@ -154,8 +157,13 @@ export default function EstimatePage() {
           if (!isMounted) return;
           setSettings(s as OrgSettings | null);
           setTax(t as TaxScope | null);
-          setTiers((tr as MarkupTier[]) ?? []);
+
+          const sortedTiers = ((tr as any[]) ?? [])
+            .slice()
+            .sort((a, b) => (a?.rank ?? 0) - (b?.rank ?? 0));
+          setTiers(sortedTiers as MarkupTier[]);
         } else {
+          if (!isMounted) return;
           setSettings(null);
           setTax(null);
           setTiers([]);
@@ -365,7 +373,9 @@ export default function EstimatePage() {
           </section>
 
           <section className="rounded-lg border p-4 text-xs text-gray-500">
-            <div>Org Settings: {settings ? "loaded" : "—"} • Tax Scope: {tax ? "loaded" : "—"} • Tiers: {tiers.length}</div>
+            <div>
+              Org Settings: {settings ? "loaded" : "—"} • Tax Scope: {tax ? "loaded" : "—"} • Tiers: {tiers.length}
+            </div>
           </section>
         </div>
       )}
