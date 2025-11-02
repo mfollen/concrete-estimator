@@ -20,7 +20,7 @@ export default function Settings() {
   const [tax, setTax] = useState<any | null>(null);
   const [tiers, setTiers] = useState<any[]>([]);
 
-  // legacy demo
+  // legacy demo (direct inserts)
   const [demoStatus, setDemoStatus] = useState<string | null>(null);
   const [demoBusy, setDemoBusy] = useState(false);
 
@@ -66,10 +66,8 @@ export default function Settings() {
       setUserId(uid);
       setUserEmail(email);
       if (uid) {
-        // once signed in, load org + config
         await loadOrgAndConfig(uid);
       } else {
-        // not signed in: stop loading, show auth card
         setLoading(false);
       }
     });
@@ -91,12 +89,10 @@ export default function Settings() {
         if (uid) {
           await loadOrgAndConfig(uid);
         } else {
-          // not signed in: do not treat as error
           setLoading(false);
         }
       } catch (e: any) {
         console.error(e);
-        // show non-fatal message but keep page usable
         setErrorText(e?.message || "Unable to check auth status.");
         setLoading(false);
       }
@@ -114,7 +110,7 @@ export default function Settings() {
       setLoading(true);
       setErrorText(null);
 
-      // find an org via membership (or create a simple default org + membership)
+      // find an org via membership (or create)
       let orgId: string | null = null;
       const { data: mems, error: memErr } = await supabase
         .from("Membership")
@@ -146,10 +142,8 @@ export default function Settings() {
       if (orgLoadErr) throw orgLoadErr;
       setOrg(orgRow as Org);
 
-      // ensure defaults
       await ensureDefaults(orgId!);
 
-      // load settings/tax/tiers for UI
       const [{ data: S }, { data: T }, { data: MK }] = await Promise.all([
         supabase.from("OrgSettings").select("*").eq('"orgId"', orgId!).single(),
         supabase.from("TaxScope").select("*").eq('"orgId"', orgId!).single(),
@@ -172,7 +166,6 @@ export default function Settings() {
     setApiMsg(null);
     setApiErr(null);
     try {
-      // require auth
       if (!userId) throw new Error("Please sign in first.");
       const res = await fetch("/api/seed-demo", {
         method: "POST",
@@ -190,6 +183,101 @@ export default function Settings() {
       setApiBusy(false);
     }
   }
+
+  // ---- legacy direct insert helper (brought back so build succeeds) ----
+  const initDemoProject = async (orgId: string) => {
+    setDemoStatus(null);
+    setDemoBusy(true);
+    try {
+      const { data: me, error: meErr } = await supabase.auth.getUser();
+      if (meErr) throw meErr;
+      const uid = me.user?.id;
+      if (!uid) throw new Error("No signed-in user.");
+
+      setDemoStatus("Creating project…");
+      const { data: project, error: pErr } = await supabase
+        .from("Project")
+        .insert({
+          orgId,
+          name: "Warehouse Expansion",
+          clientName: "BigCo",
+          location: "Joliet, IL",
+          createdBy: uid,
+        })
+        .select("*")
+        .single();
+      if (pErr) throw pErr;
+
+      setDemoStatus("Creating estimate…");
+      const { data: estimate, error: eErr } = await supabase
+        .from("Estimate")
+        .insert({
+          projectId: (project as any).id,
+          title: "Base Bid",
+          overheadPct: 10,
+          createdBy: uid,
+          mobilizationCount: 1,
+        })
+        .select("*")
+        .single();
+      if (eErr) throw eErr;
+
+      setDemoStatus("Adding sample items…");
+      const { error: iErr } = await supabase.from("EstimateItem").insert([
+        {
+          estimateId: (estimate as any).id,
+          kind: "SLAB",
+          description: '6" slab on grade',
+          unit: "SF",
+          quantity: 20000,
+          unitCost: 5.25,
+          markupPct: 20,
+          contingencyPct: 5,
+          durationHours: 160,
+          isMaterial: true,
+          isLabor: true,
+          isEquipment: true,
+          rank: 1,
+        },
+        {
+          estimateId: (estimate as any).id,
+          kind: "FOOTING",
+          description: 'Strip footing 24"x12"',
+          unit: "LF",
+          quantity: 600,
+          unitCost: 18.5,
+          markupPct: 15,
+          contingencyPct: 5,
+          durationHours: 80,
+          isMaterial: true,
+          isLabor: true,
+          rank: 2,
+        },
+        {
+          estimateId: (estimate as any).id,
+          kind: "WALL",
+          description: '8" formed wall',
+          unit: "SF",
+          quantity: 3000,
+          unitCost: 15.0,
+          markupPct: 12,
+          contingencyPct: 5,
+          durationHours: 120,
+          isMaterial: true,
+          isLabor: true,
+          rank: 3,
+        },
+      ]);
+      if (iErr) throw iErr;
+
+      setDemoStatus("✅ Demo project created! Go to Home to see it.");
+    } catch (err: any) {
+      console.error("Init demo data failed:", err);
+      setDemoStatus(`❌ Initialize Demo Data failed: ${err?.message || String(err)}`);
+    } finally {
+      setDemoBusy(false);
+    }
+  };
 
   async function save() {
     try {
@@ -415,6 +503,4 @@ async function ensureDefaults(orgId: string) {
     { orgId, minAmount: 10000, maxAmount: 50000, percent: 15, rank: 2 },
     { orgId, minAmount: 50000, maxAmount: null, percent: 10, rank: 3 },
   ]);
-
-  // optional: any other org-level defaults…
 }
