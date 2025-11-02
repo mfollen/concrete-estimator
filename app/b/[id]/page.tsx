@@ -30,7 +30,7 @@ type Estimate = {
 type EstimateItem = {
   id: string;
   estimateId: string;
-  kind: string; // e.g. 'SLAB', 'FOOTING', etc.
+  kind: string;
   description: string;
   unit: string;
   quantity: number;
@@ -146,7 +146,7 @@ export default function EstimatePage() {
             await Promise.all([
               supabase.from("OrgSettings").select("*").eq("orgId", p.orgId).maybeSingle(),
               supabase.from("TaxScope").select("*").eq("orgId", p.orgId).maybeSingle(),
-              // no .order("rank") here; sort after fetch
+              // IMPORTANT: no .order("rank") here; sort after fetch
               supabase.from("MarkupTier").select("*").eq("orgId", p.orgId),
             ]);
 
@@ -189,12 +189,11 @@ export default function EstimatePage() {
   }, [projectId]);
 
   const totals = useMemo(() => {
-    // very light placeholder calc; customize later or use your utils/estimate.ts functions
+    // placeholder math (will be replaced by utils/estimate.ts)
     const subtotal = items.reduce((sum, it) => sum + (it.quantity ?? 0) * (it.unitCost ?? 0), 0);
     const markupPct =
       settings?.useMarkupTiers && tiers.length > 0
-        ? // pick first matching tier by subtotal
-          (() => {
+        ? (() => {
             const tier = tiers.find(
               (t) => subtotal >= t.minAmount && (t.maxAmount == null || subtotal < t.maxAmount)
             );
@@ -204,23 +203,21 @@ export default function EstimatePage() {
 
     const contingencyPct = (estimate?.contingencyPct ?? settings?.defaultContingency ?? 0) / 100;
 
-    let afterMarkup = subtotal + subtotal * markupPct;
-    let afterContingency =
+    const afterMarkup = subtotal + subtotal * markupPct;
+    const afterContingency =
       settings?.contingencyOrder === "BEFORE_MARKUP"
-        ? subtotal + subtotal * contingencyPct + subtotal * markupPct // contingency then markup
-        : afterMarkup + afterMarkup * contingencyPct; // markup then contingency
+        ? subtotal + subtotal * contingencyPct + subtotal * markupPct
+        : afterMarkup + afterMarkup * contingencyPct;
 
     const mobilization = (settings?.mobilizationPrice ?? 0) * (estimate?.mobilizationCount ?? 0);
 
     const taxRate = (tax?.rate ?? 0) / 100;
-    // naive tax: apply to whole afterContingency total if any of tax flags are set
     const taxable =
       tax?.taxMaterials || tax?.taxLabor || tax?.taxEquipment || tax?.taxMarkup || tax?.taxContingency
         ? afterContingency
         : 0;
 
     const taxTotal = taxable * taxRate;
-
     const grand = afterContingency + mobilization + taxTotal;
 
     return {
@@ -236,7 +233,6 @@ export default function EstimatePage() {
 
   return (
     <div className="mx-auto max-w-4xl p-6">
-      {/* Build marker to help verify the deployed file */}
       <div className="text-xs text-gray-500 mb-2">Build marker: PROJECT-ESTIMATE-V1</div>
 
       <header className="flex items-center justify-between mb-4">
