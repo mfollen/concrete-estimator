@@ -62,17 +62,19 @@ function getServerSupabase(): Supa {
 
 async function findOrCreateOrg(supabase: Supa, userId: string): Promise<OrgResult> {
   // Reuse any org through membership
-  const { data: membership, error: membershipErr } = await supabase
+  const { data: membershipRaw, error: membershipErr } = await supabase
     .from("Membership")
     .select("orgId")
     .eq("userId", userId)
     .limit(1)
     .maybeSingle();
   if (membershipErr) throw membershipErr;
+
+  const membership = membershipRaw as { orgId?: string } | null;
   if (membership?.orgId) return { orgId: membership.orgId, created: false };
 
   // Reuse Demo Org by name
-  const { data: found, error: findErr } = await supabase
+  const { data: foundRaw, error: findErr } = await supabase
     .from(ORG_TABLE)
     .select("id")
     .eq("name", DEMO.ORG_NAME)
@@ -80,6 +82,7 @@ async function findOrCreateOrg(supabase: Supa, userId: string): Promise<OrgResul
     .maybeSingle();
   if (findErr) throw findErr;
 
+  const found = foundRaw as { id?: string } | null;
   if (found?.id) {
     const { error: upErr } = await supabase
       .from("Membership")
@@ -89,13 +92,14 @@ async function findOrCreateOrg(supabase: Supa, userId: string): Promise<OrgResul
   }
 
   // Create new Demo Org
-  const { data: created, error: orgCreateErr } = await supabase
+  const { data: createdRaw, error: orgCreateErr } = await supabase
     .from(ORG_TABLE)
     .insert([{ name: DEMO.ORG_NAME }])
     .select("id")
     .single();
   if (orgCreateErr) throw orgCreateErr;
 
+  const created = createdRaw as { id: string };
   const { error: memErr } = await supabase
     .from("Membership")
     .upsert([{ userId, orgId: created.id, role: "OWNER" }], { onConflict: "userId,orgId" });
@@ -136,7 +140,7 @@ async function upsertMarkupTiers(supabase: Supa, orgId: string): Promise<void> {
 }
 
 async function findOrCreateProject(supabase: Supa, orgId: string): Promise<ProjectResult> {
-  const { data: existing, error: findErr } = await supabase
+  const { data: existingRaw, error: findErr } = await supabase
     .from("Project")
     .select("id")
     .eq("orgId", orgId)
@@ -145,20 +149,22 @@ async function findOrCreateProject(supabase: Supa, orgId: string): Promise<Proje
     .maybeSingle();
   if (findErr) throw findErr;
 
+  const existing = existingRaw as { id?: string } | null;
   if (existing?.id) return { projectId: existing.id, created: false };
 
-  const { data: created, error: createErr } = await supabase
+  const { data: createdRaw, error: createErr } = await supabase
     .from("Project")
     .insert([{ orgId, name: DEMO.PROJECT_NAME, clientName: "Acme Distribution LLC", location: "Cicero, IL" }])
     .select("id")
     .single();
   if (createErr) throw createErr;
 
+  const created = createdRaw as { id: string };
   return { projectId: created.id, created: true };
 }
 
 async function findOrCreateEstimate(supabase: Supa, projectId: string): Promise<EstimateResult> {
-  const { data: existing, error: findErr } = await supabase
+  const { data: existingRaw, error: findErr } = await supabase
     .from("Estimate")
     .select("id")
     .eq("projectId", projectId)
@@ -167,15 +173,17 @@ async function findOrCreateEstimate(supabase: Supa, projectId: string): Promise<
     .maybeSingle();
   if (findErr) throw findErr;
 
+  const existing = existingRaw as { id?: string } | null;
   if (existing?.id) return { estimateId: existing.id, created: false };
 
-  const { data: created, error: createErr } = await supabase
+  const { data: createdRaw, error: createErr } = await supabase
     .from("Estimate")
     .insert([{ projectId, title: DEMO.ESTIMATE_TITLE, ...DEMO.ESTIMATE_DEFAULTS }])
     .select("id")
     .single();
   if (createErr) throw createErr;
 
+  const created = createdRaw as { id: string };
   return { estimateId: created.id, created: true };
 }
 
@@ -212,9 +220,9 @@ async function seedItemsIfEmpty(supabase: Supa, estimateId: string): Promise<Ite
 
 export async function POST(req: Request) {
   try {
-    // parse body in a way TS is happy with
-    const body: unknown = await req.json().catch(() => ({}));
-    const userId = (body as { userId?: string })?.userId;
+    const bodyUnknown = await req.json().catch(() => ({}));
+    const body = bodyUnknown as { userId?: string };
+    const userId = body.userId;
 
     if (!userId) {
       return NextResponse.json(
