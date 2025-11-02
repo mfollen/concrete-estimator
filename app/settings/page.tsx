@@ -12,9 +12,14 @@ export default function Settings() {
   const [tax, setTax] = useState<any | null>(null);
   const [tiers, setTiers] = useState<any[]>([]);
 
-  // These are used by the "Initialize Demo Data" button
+  // Old direct-insert demo initializer (kept for now)
   const [demoStatus, setDemoStatus] = useState<string | null>(null);
   const [demoBusy, setDemoBusy] = useState(false);
+
+  // New serverless seeder status
+  const [apiBusy, setApiBusy] = useState(false);
+  const [apiMsg, setApiMsg] = useState<string | null>(null);
+  const [apiErr, setApiErr] = useState<string | null>(null);
 
   useEffect(() => {
     (async () => {
@@ -59,7 +64,7 @@ export default function Settings() {
         if (orgLoadErr) throw orgLoadErr;
         setOrg(orgRow as Org);
 
-        // Ensure defaults exist
+        // Ensure defaults exist (branding/tax/tiers)
         await ensureDefaults(orgId!);
 
         // Load for UI
@@ -85,7 +90,38 @@ export default function Settings() {
     })();
   }, []);
 
-  // ⬇️ Moved INSIDE the component so it can use setDemoStatus / setDemoBusy
+  // ---- New: serverless seeder via /api/seed-demo ----
+  async function seedDemoViaApi() {
+    setApiBusy(true);
+    setApiMsg(null);
+    setApiErr(null);
+    try {
+      const { data: me, error: meErr } = await supabase.auth.getUser();
+      if (meErr) throw meErr;
+      const userId = me.user?.id;
+      if (!userId) throw new Error("No signed-in user.");
+
+      const res = await fetch("/api/seed-demo", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ userId }),
+      });
+      const json = await res.json();
+      if (!res.ok || !json?.ok) {
+        throw new Error(json?.error ?? "Failed to seed demo data");
+      }
+
+      setApiMsg(
+        `Demo ready — org:${json.summary.org}, project:${json.summary.project}, estimate:${json.summary.estimate}, items:${json.summary.items}`
+      );
+    } catch (e: any) {
+      setApiErr(e?.message ?? "Unknown error while seeding");
+    } finally {
+      setApiBusy(false);
+    }
+  }
+
+  // ---- Existing: direct-insert demo initializer (kept; optional going forward) ----
   const initDemoProject = async (orgId: string) => {
     setDemoStatus(null);
     setDemoBusy(true);
@@ -204,10 +240,21 @@ export default function Settings() {
 
       <h1 className="title">Settings</h1>
 
+      {/* New: serverless seeder card */}
       <div className="card" style={{ marginBottom: 16 }}>
-        <p><strong>Step 1:</strong> Click to create a demo project.</p>
+        <p><strong>Seed via API:</strong> Creates/reuses a Demo Org, Warehouse Expansion project, one estimate, and sample items (idempotent).</p>
+        <button className="button" disabled={apiBusy} onClick={seedDemoViaApi}>
+          {apiBusy ? "Seeding…" : "Seed Demo (serverless)"}
+        </button>
+        {apiMsg && <p style={{ marginTop: 8, color: "green" }}>{apiMsg}</p>}
+        {apiErr && <p style={{ marginTop: 8, color: "crimson" }}>{apiErr}</p>}
+      </div>
+
+      {/* Existing: direct-insert demo (optional) */}
+      <div className="card" style={{ marginBottom: 16 }}>
+        <p><strong>Legacy step:</strong> Click to create a demo project directly (may create duplicates).</p>
         <button className="button" disabled={demoBusy} onClick={() => initDemoProject(org!.id)}>
-          {demoBusy ? "Working…" : "Initialize Demo Data"}
+          {demoBusy ? "Working…" : "Initialize Demo Data (direct)"}
         </button>
         {demoStatus && <p style={{ marginTop: 8 }}>{demoStatus}</p>}
       </div>
@@ -322,7 +369,7 @@ async function ensureDefaults(orgId: string) {
     {
       orgId,
       useMarkupTiers: true,
-      defaultContingency: 5,
+      defaultContingency: 5, // percent (your page divides by 100 later where needed)
       contingencyOrder: "AFTER_MARKUP",
       mobilizationPrice: 3850,
       crewHoursPerDay: 8,
@@ -335,7 +382,7 @@ async function ensureDefaults(orgId: string) {
   await supabase.from("TaxScope").upsert(
     {
       orgId,
-      rate: 0,
+      rate: 0, // percent
       taxMaterials: false,
       taxLabor: false,
       taxEquipment: false,
@@ -363,6 +410,7 @@ async function ensureDefaults(orgId: string) {
   for (const r of rebar) {
     await supabase.from("RebarConversion").upsert(
       { orgId, barSize: r.size, poundsPerFoot: r.lbft },
+      // Supabase upsert composite conflict signature is fine here
       { onConflict: "orgId,barSize" } as any
     );
   }
