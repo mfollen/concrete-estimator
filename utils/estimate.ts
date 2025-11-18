@@ -41,10 +41,7 @@ export function applyMarkupTiers(
   return { markup: round2(markup), effectivePct: round2(effectivePct) };
 }
 
-export function lineSubtotal(
-  quantity: number,
-  unitCost: number
-): Money {
+export function lineSubtotal(quantity: number, unitCost: number): Money {
   return round2(quantity * unitCost);
 }
 
@@ -58,8 +55,13 @@ export function withMarkupAndContingency(
     contingencyOrder: "AFTER_MARKUP" | "BEFORE_MARKUP";
   }
 ) {
-  const { useMarkupTiers, tiers, lineMarkupPct = 0, contingencyPct = 0, contingencyOrder } =
-    options;
+  const {
+    useMarkupTiers,
+    tiers,
+    lineMarkupPct = 0,
+    contingencyPct = 0,
+    contingencyOrder,
+  } = options;
 
   let subtotal = base;
   let markup = 0;
@@ -104,7 +106,10 @@ export function addMobilization(
   mobilizationCount: number
 ) {
   const mob = round2(mobilizationPrice * (mobilizationCount || 0));
-  return { mobilization: mob, totalWithMobilization: round2(currentTotal + mob) };
+  return {
+    mobilization: mob,
+    totalWithMobilization: round2(currentTotal + mob),
+  };
 }
 
 export function applyTax(
@@ -146,4 +151,157 @@ export function applyTax(
 
   const taxAmt = round2(taxable * rateDec);
   return { tax: taxAmt, totalWithTax: round2(currentTotal + taxAmt) };
+}
+
+// ---------------------------------------------------------------------------
+// Aggregate estimate totals (MVP helper used by the project page)
+// ---------------------------------------------------------------------------
+
+export type TotalsItemInput = {
+  quantity?: number | null;
+  unitCost?: number | null;
+  isMaterial?: boolean | null;
+  isLabor?: boolean | null;
+  isEquipment?: boolean | null;
+  markupPct?: number | null;
+  contingencyPct?: number | null;
+};
+
+export type TotalsEstimateInput = {
+  markupPct?: number | null;
+  contingencyPct?: number | null;
+  mobilizationCount?: number | null;
+} | null;
+
+export type TotalsSettingsInput = {
+  useMarkupTiers?: boolean | null;
+  defaultContingency?: number | null;
+  contingencyOrder?: "AFTER_MARKUP" | "BEFORE_MARKUP" | null;
+  mobilizationPrice?: number | null;
+} | null;
+
+export type TotalsTaxInput = {
+  rate?: number | null;
+  taxMaterials?: boolean | null;
+  taxLabor?: boolean | null;
+  taxEquipment?: boolean | null;
+  taxMarkup?: boolean | null;
+  taxContingency?: boolean | null;
+} | null;
+
+export type ComputeTotalsInput = {
+  items: TotalsItemInput[];
+  estimate: TotalsEstimateInput;
+  settings: TotalsSettingsInput;
+  tax: TotalsTaxInput;
+  tiers: MarkupTier[];
+};
+
+export type ComputeTotalsResult = {
+  subtotal: Money;
+  markupPct: number; // percent, e.g. 15 = 15%
+  contingencyPct: number; // percent
+  markupAmount: Money;
+  contingencyAmount: Money;
+  afterMarkup: Money;
+  afterContingency: Money;
+  mobilization: Money;
+  taxRate: number; // percent
+  taxBase: Money;
+  taxTotal: Money;
+  grand: Money;
+};
+
+function sanitizeNumber(
+  value: number | null | undefined,
+  fallback = 0
+): number {
+  if (value === null || value === undefined || Number.isNaN(value)) return fallback;
+  return Number(value);
+}
+
+/**
+ * Compute all major monetary totals for an estimate.
+ *
+ * NOTE (MVP): still uses a simplified tax model:
+ * if any tax flags in TaxScope are true, we apply the tax rate
+ * to the full post-contingency total (before mobilization).
+ */
+export function computeTotals(input: ComputeTotalsInput): ComputeTotalsResult {
+  const { items, estimate, settings, tax, tiers } = input;
+
+  // Subtotal: sum of qty * unitCost across all items
+  const subtotal = items.reduce((sum, it) => {
+    const qty = sanitizeNumber(it.quantity);
+    const unitCost = sanitizeNumber(it.unitCost);
+    return sum + qty * unitCost;
+  }, 0);
+
+  // Markup %
+  let markupRate = 0;
+  const useTiers = !!settings?.useMarkupTiers && tiers.length > 0;
+
+  if (useTiers) {
+    const res = applyMarkupTiers(subtotal, tiers);
+    // res.effectivePct is already the blended tier %,
+    // but we want the actual markupRate (markup/base)
+    markupRate = subtotal > 0 ? res.markup / subtotal : 0;
+  } else {
+    markupRate = sanitizeNumber(estimate?.markupPct) / 100;
+  }
+
+  // Contingency %
+  const contingencyRate =
+    sanitizeNumber(
+      estimate?.contingencyPct,
+      sanitizeNumber(settings?.defaultContingency)
+    ) / 100;
+
+  const markupAmount = subtotal * markupRate;
+  const afterMarkup = subtotal + markupAmount;
+
+  const contingencyBase =
+    settings?.contingencyOrder === "BEFORE_MARKUP" ? subtotal : afterMarkup;
+
+  const contingencyAmount = contingencyBase * contingencyRate;
+
+  const afterContingency =
+    settings?.contingencyOrder === "BEFORE_MARKUP"
+      ? subtotal + markupAmount + contingencyAmount
+      : afterMarkup + contingencyAmount;
+
+  const mobilizationPrice = sanitizeNumber(settings?.mobilizationPrice);
+  const mobilizationCount = sanitizeNumber(estimate?.mobilizationCount);
+  const mobilization = mobilizationPrice * mobilizationCount;
+
+  // Tax
+  const taxRateDec = sanitizeNumber(tax?.rate) / 100;
+  const anyTaxFlag =
+    !!tax?.taxMaterials ||
+    !!tax?.taxLabor ||
+    !!tax?.taxEquipment ||
+    !!tax?.taxMarkup ||
+    !!tax?.taxContingency;
+
+  // MVP: apply tax flags to the entire post-contingency total,
+  // excluding mobilization.
+  const taxBase = anyTaxFlag ? afterContingency : 0;
+  const taxTotal = taxBase * taxRateDec;
+
+  const grand = afterContingency + mobilization + taxTotal;
+
+  return {
+    subtotal: round2(subtotal),
+    markupPct: round2(markupRate * 100),
+    contingencyPct: round2(contingencyRate * 100),
+    markupAmount: round2(markupAmount),
+    contingencyAmount: round2(contingencyAmount),
+    afterMarkup: round2(afterMarkup),
+    afterContingency: round2(afterContingency),
+    mobilization: round2(mobilization),
+    taxRate: round2(taxRateDec * 100),
+    taxBase: round2(taxBase),
+    taxTotal: round2(taxTotal),
+    grand: round2(grand),
+  };
 }
