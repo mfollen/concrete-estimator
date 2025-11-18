@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import { supabase } from "../../../lib/supabaseClient";
+import { computeTotals } from "../../../utils/estimate";
 
 // ------- Lightweight shapes (for editor hints only)
 type Project = {
@@ -201,65 +202,29 @@ export default function EstimatePage() {
     };
   }, [projectId]);
 
-  const totals = useMemo(() => {
-    const subtotal = items.reduce(
-      (sum, it) => sum + (it.quantity ?? 0) * (it.unitCost ?? 0),
-      0
-    );
-
-    const markupPct =
-      settings?.useMarkupTiers && tiers.length > 0
-        ? (() => {
-            const tier = tiers.find(
-              (t) =>
-                subtotal >= t.minAmount &&
-                (t.maxAmount == null || subtotal < t.maxAmount)
-            );
-            return (tier?.percent ?? 0) / 100;
-          })()
-        : (estimate?.markupPct ?? 0) / 100;
-
-    const contingencyPct =
-      (estimate?.contingencyPct ?? settings?.defaultContingency ?? 0) / 100;
-
-    const afterMarkup = subtotal + subtotal * markupPct;
-    const afterContingency =
-      settings?.contingencyOrder === "BEFORE_MARKUP"
-        ? subtotal + subtotal * contingencyPct + subtotal * markupPct
-        : afterMarkup + afterMarkup * contingencyPct;
-
-    const mobilization =
-      (settings?.mobilizationPrice ?? 0) * (estimate?.mobilizationCount ?? 0);
-
-    const taxRate = (tax?.rate ?? 0) / 100;
-    const taxable =
-      tax?.taxMaterials ||
-      tax?.taxLabor ||
-      tax?.taxEquipment ||
-      tax?.taxMarkup ||
-      tax?.taxContingency
-        ? afterContingency
-        : 0;
-
-    const taxTotal = taxable * taxRate;
-    const grand = afterContingency + mobilization + taxTotal;
-
-    return {
-      subtotal,
-      markupPct: markupPct * 100,
-      contingencyPct: contingencyPct * 100,
-      afterContingency,
-      mobilization,
-      taxTotal,
-      grand,
-    };
-  }, [items, estimate, settings, tax, tiers]);
+  const totals = useMemo(
+    () =>
+      computeTotals({
+        // cast to keep TS happy without over-engineering types here
+        items: items as any,
+        estimate: estimate as any,
+        settings: settings as any,
+        tax: tax as any,
+        tiers: tiers.map((t) => ({
+          minAmount: t.minAmount,
+          maxAmount: t.maxAmount,
+          percent: t.percent,
+          rank: t.rank,
+        })),
+      }),
+    [items, estimate, settings, tax, tiers]
+  );
 
   return (
     <div className="mx-auto max-w-4xl p-6">
       {/* Build marker to confirm the new bundle is live */}
       <div className="text-xs text-gray-500 mb-2">
-        Build marker: <strong>PROJECT-ESTIMATE-V5-NORANK</strong>
+        Build marker: <strong>PROJECT-ESTIMATE-V6-TOTALS</strong>
       </div>
 
       <header className="flex items-center justify-between mb-4">
