@@ -41,8 +41,7 @@ type EstimateItem = {
   durationHours?: number | null;
   isMaterial?: boolean | null;
   isLabor?: boolean | null;
-  isEquipment?: boolean | null;
-  rank?: number | null;
+  // NOTE: no rank / isEquipment persistence for now (schema doesn’t have them)
 };
 
 type OrgSettings = {
@@ -124,7 +123,7 @@ export default function EstimatePage() {
         if (!isMounted) return;
         setEstimate(est as Estimate | null);
 
-        // 3) Estimate items — NO SQL ORDER BY "rank" (we sort in JS)
+        // 3) Estimate items (no rank column; sort stably by id for now)
         if (est?.id) {
           const { data: its, error: itsErr } = await supabase
             .from("EstimateItem")
@@ -135,15 +134,9 @@ export default function EstimatePage() {
 
           const sorted = ((its as any[]) ?? [])
             .slice()
-            .sort((a, b) => {
-              const ra =
-                a?.rank == null ? Number.MAX_SAFE_INTEGER : (a.rank as number);
-              const rb =
-                b?.rank == null ? Number.MAX_SAFE_INTEGER : (b.rank as number);
-              if (ra !== rb) return ra - rb;
-              // stable tiebreaker by id
-              return String(a?.id ?? "").localeCompare(String(b?.id ?? ""));
-            });
+            .sort((a, b) =>
+              String(a?.id ?? "").localeCompare(String(b?.id ?? ""))
+            );
 
           setItems(sorted as EstimateItem[]);
         } else {
@@ -224,14 +217,13 @@ export default function EstimatePage() {
     if (!current) return;
     setSavingId(id);
     try {
+      // Only send columns we KNOW exist in the Supabase schema
       const payload: Partial<EstimateItem> = {
         unit: current.unit,
         quantity: current.quantity,
         unitCost: current.unitCost,
         isMaterial: current.isMaterial,
         isLabor: current.isLabor,
-        isEquipment: current.isEquipment,
-        rank: current.rank ?? null,
       };
 
       const { data, error: updErr } = await supabase
@@ -244,19 +236,14 @@ export default function EstimatePage() {
       if (updErr) throw updErr;
 
       const updated = (data || current) as EstimateItem;
-      setItems((prev) => {
-        const next = prev.map((it) => (it.id === id ? updated : it));
-        return next
+      setItems((prev) =>
+        prev
+          .map((it) => (it.id === id ? updated : it))
           .slice()
-          .sort((a, b) => {
-            const ra =
-              a.rank == null ? Number.MAX_SAFE_INTEGER : (a.rank as number);
-            const rb =
-              b.rank == null ? Number.MAX_SAFE_INTEGER : (b.rank as number);
-            if (ra !== rb) return ra - rb;
-            return String(a.id).localeCompare(String(b.id));
-          });
-      });
+          .sort((a, b) =>
+            String(a.id ?? "").localeCompare(String(b.id ?? ""))
+          )
+      );
     } catch (err: any) {
       console.error("Save item failed:", err);
       alert(err?.message || "Save failed");
@@ -272,13 +259,6 @@ export default function EstimatePage() {
     }
     setCreating(true);
     try {
-      const maxRank =
-        items.reduce(
-          (max, it) =>
-            Math.max(max, it.rank == null ? 0 : (it.rank as number)),
-          0
-        ) || 0;
-
       const { data, error } = await supabase
         .from("EstimateItem")
         .insert({
@@ -290,8 +270,7 @@ export default function EstimatePage() {
           unitCost: 0,
           isMaterial: true,
           isLabor: true,
-          isEquipment: false,
-          rank: maxRank + 1,
+          // NOTE: no isEquipment / rank here – your schema doesn’t have them
         })
         .select("*")
         .single();
@@ -299,14 +278,9 @@ export default function EstimatePage() {
       if (error) throw error;
 
       setItems((prev) =>
-        [...prev, data as EstimateItem].sort((a, b) => {
-          const ra =
-            a.rank == null ? Number.MAX_SAFE_INTEGER : (a.rank as number);
-          const rb =
-            b.rank == null ? Number.MAX_SAFE_INTEGER : (b.rank as number);
-          if (ra !== rb) return ra - rb;
-          return String(a.id).localeCompare(String(b.id));
-        })
+        [...prev, data as EstimateItem].sort((a, b) =>
+          String(a.id ?? "").localeCompare(String(b.id ?? ""))
+        )
       );
     } catch (err: any) {
       console.error("Add item failed:", err);
@@ -334,49 +308,6 @@ export default function EstimatePage() {
     }
   }
 
-  async function handleMoveItem(id: string, direction: "up" | "down") {
-    const idx = items.findIndex((it) => it.id === id);
-    if (idx === -1) return;
-
-    if (direction === "up" && idx === 0) return;
-    if (direction === "down" && idx === items.length - 1) return;
-
-    const targetIndex = direction === "up" ? idx - 1 : idx + 1;
-    const a = items[idx];
-    const b = items[targetIndex];
-
-    const rankA = a.rank ?? idx + 1;
-    const rankB = b.rank ?? targetIndex + 1;
-
-    // Swap ranks locally first for snappy UI
-    setItems((prev) => {
-      const clone = [...prev];
-      clone[idx] = { ...a, rank: rankB };
-      clone[targetIndex] = { ...b, rank: rankA };
-      return clone
-        .slice()
-        .sort((x, y) => {
-          const rx =
-            x.rank == null ? Number.MAX_SAFE_INTEGER : (x.rank as number);
-          const ry =
-            y.rank == null ? Number.MAX_SAFE_INTEGER : (y.rank as number);
-          if (rx !== ry) return rx - ry;
-          return String(x.id).localeCompare(String(y.id));
-        });
-    });
-
-    try {
-      const { error } = await supabase.from("EstimateItem").upsert([
-        { id: a.id, rank: rankB },
-        { id: b.id, rank: rankA },
-      ]);
-      if (error) throw error;
-    } catch (err: any) {
-      console.error("Reorder failed:", err);
-      alert(err?.message || "Reorder failed");
-    }
-  }
-
   // ---------- Totals using shared computeTotals helper ----------
 
   const totals = useMemo(
@@ -401,7 +332,7 @@ export default function EstimatePage() {
     <div className="mx-auto max-w-4xl p-6">
       {/* Build marker to confirm the new bundle is live */}
       <div className="text-xs text-gray-500 mb-2">
-        Build marker: <strong>PROJECT-ESTIMATE-V7-CRUD</strong>
+        Build marker: <strong>PROJECT-ESTIMATE-V8-NORANK-NOEQUIP</strong>
       </div>
 
       <header className="flex items-center justify-between mb-4">
@@ -495,7 +426,6 @@ export default function EstimatePage() {
                       <th className="py-2 pr-3">Unit Cost</th>
                       <th className="py-2 pr-3">Cost</th>
                       <th className="py-2 pr-3">Flags</th>
-                      <th className="py-2 pr-3">Rank</th>
                       <th className="py-2 pr-3">Actions</th>
                     </tr>
                   </thead>
@@ -572,7 +502,7 @@ export default function EstimatePage() {
                               />
                               M
                             </label>
-                            <label className="mr-2 inline-flex items-center gap-1 text-xs">
+                            <label className="inline-flex items-center gap-1 text-xs">
                               <input
                                 type="checkbox"
                                 checked={!!it.isLabor}
@@ -587,56 +517,8 @@ export default function EstimatePage() {
                               />
                               L
                             </label>
-                            <label className="inline-flex items-center gap-1 text-xs">
-                              <input
-                                type="checkbox"
-                                checked={!!it.isEquipment}
-                                onChange={(e) =>
-                                  updateLocalItem(
-                                    it.id,
-                                    "isEquipment",
-                                    e.target.checked
-                                  )
-                                }
-                                disabled={disabled}
-                              />
-                              E
-                            </label>
-                          </td>
-                          <td className="py-2 pr-3">
-                            <input
-                              type="number"
-                              className="w-16 rounded border px-1 py-0.5 text-xs"
-                              value={it.rank ?? idx + 1}
-                              onChange={(e) =>
-                                updateLocalItem(
-                                  it.id,
-                                  "rank",
-                                  e.target.value === ""
-                                    ? null
-                                    : Number(e.target.value)
-                                )
-                              }
-                              disabled={disabled}
-                            />
                           </td>
                           <td className="py-2 pr-3 space-x-1 whitespace-nowrap text-xs">
-                            <button
-                              className="rounded border px-1 py-0.5"
-                              onClick={() => handleMoveItem(it.id, "up")}
-                              disabled={disabled || idx === 0}
-                              title="Move up"
-                            >
-                              ↑
-                            </button>
-                            <button
-                              className="rounded border px-1 py-0.5"
-                              onClick={() => handleMoveItem(it.id, "down")}
-                              disabled={disabled || idx === items.length - 1}
-                              title="Move down"
-                            >
-                              ↓
-                            </button>
                             <button
                               className="rounded border px-2 py-0.5"
                               onClick={() => handleSaveItem(it.id)}
