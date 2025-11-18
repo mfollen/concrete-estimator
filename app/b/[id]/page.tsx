@@ -89,6 +89,11 @@ export default function EstimatePage() {
   const [tax, setTax] = useState<TaxScope | null>(null);
   const [tiers, setTiers] = useState<MarkupTier[]>([]);
 
+  // Small UI states for CRUD
+  const [savingId, setSavingId] = useState<string | null>(null);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [creating, setCreating] = useState(false);
+
   useEffect(() => {
     let isMounted = true;
 
@@ -202,10 +207,182 @@ export default function EstimatePage() {
     };
   }, [projectId]);
 
+  // ---------- CRUD handlers for EstimateItem ----------
+
+  function updateLocalItem<K extends keyof EstimateItem>(
+    id: string,
+    key: K,
+    value: EstimateItem[K]
+  ) {
+    setItems((prev) =>
+      prev.map((it) => (it.id === id ? { ...it, [key]: value } : it))
+    );
+  }
+
+  async function handleSaveItem(id: string) {
+    const current = items.find((it) => it.id === id);
+    if (!current) return;
+    setSavingId(id);
+    try {
+      const payload: Partial<EstimateItem> = {
+        unit: current.unit,
+        quantity: current.quantity,
+        unitCost: current.unitCost,
+        isMaterial: current.isMaterial,
+        isLabor: current.isLabor,
+        isEquipment: current.isEquipment,
+        rank: current.rank ?? null,
+      };
+
+      const { data, error: updErr } = await supabase
+        .from("EstimateItem")
+        .update(payload)
+        .eq("id", id)
+        .select("*")
+        .maybeSingle();
+
+      if (updErr) throw updErr;
+
+      const updated = (data || current) as EstimateItem;
+      setItems((prev) => {
+        const next = prev.map((it) => (it.id === id ? updated : it));
+        return next
+          .slice()
+          .sort((a, b) => {
+            const ra =
+              a.rank == null ? Number.MAX_SAFE_INTEGER : (a.rank as number);
+            const rb =
+              b.rank == null ? Number.MAX_SAFE_INTEGER : (b.rank as number);
+            if (ra !== rb) return ra - rb;
+            return String(a.id).localeCompare(String(b.id));
+          });
+      });
+    } catch (err: any) {
+      console.error("Save item failed:", err);
+      alert(err?.message || "Save failed");
+    } finally {
+      setSavingId(null);
+    }
+  }
+
+  async function handleAddItem() {
+    if (!estimate?.id) {
+      alert("No estimate found for this project.");
+      return;
+    }
+    setCreating(true);
+    try {
+      const maxRank =
+        items.reduce(
+          (max, it) =>
+            Math.max(max, it.rank == null ? 0 : (it.rank as number)),
+          0
+        ) || 0;
+
+      const { data, error } = await supabase
+        .from("EstimateItem")
+        .insert({
+          estimateId: estimate.id,
+          kind: "LINE",
+          description: "New line item",
+          unit: "EA",
+          quantity: 0,
+          unitCost: 0,
+          isMaterial: true,
+          isLabor: true,
+          isEquipment: false,
+          rank: maxRank + 1,
+        })
+        .select("*")
+        .single();
+
+      if (error) throw error;
+
+      setItems((prev) =>
+        [...prev, data as EstimateItem].sort((a, b) => {
+          const ra =
+            a.rank == null ? Number.MAX_SAFE_INTEGER : (a.rank as number);
+          const rb =
+            b.rank == null ? Number.MAX_SAFE_INTEGER : (b.rank as number);
+          if (ra !== rb) return ra - rb;
+          return String(a.id).localeCompare(String(b.id));
+        })
+      );
+    } catch (err: any) {
+      console.error("Add item failed:", err);
+      alert(err?.message || "Add line item failed");
+    } finally {
+      setCreating(false);
+    }
+  }
+
+  async function handleDeleteItem(id: string) {
+    if (!confirm("Delete this line item?")) return;
+    setDeletingId(id);
+    try {
+      const { error } = await supabase
+        .from("EstimateItem")
+        .delete()
+        .eq("id", id);
+      if (error) throw error;
+      setItems((prev) => prev.filter((it) => it.id !== id));
+    } catch (err: any) {
+      console.error("Delete item failed:", err);
+      alert(err?.message || "Delete failed");
+    } finally {
+      setDeletingId(null);
+    }
+  }
+
+  async function handleMoveItem(id: string, direction: "up" | "down") {
+    const idx = items.findIndex((it) => it.id === id);
+    if (idx === -1) return;
+
+    if (direction === "up" && idx === 0) return;
+    if (direction === "down" && idx === items.length - 1) return;
+
+    const targetIndex = direction === "up" ? idx - 1 : idx + 1;
+    const a = items[idx];
+    const b = items[targetIndex];
+
+    const rankA = a.rank ?? idx + 1;
+    const rankB = b.rank ?? targetIndex + 1;
+
+    // Swap ranks locally first for snappy UI
+    setItems((prev) => {
+      const clone = [...prev];
+      clone[idx] = { ...a, rank: rankB };
+      clone[targetIndex] = { ...b, rank: rankA };
+      return clone
+        .slice()
+        .sort((x, y) => {
+          const rx =
+            x.rank == null ? Number.MAX_SAFE_INTEGER : (x.rank as number);
+          const ry =
+            y.rank == null ? Number.MAX_SAFE_INTEGER : (y.rank as number);
+          if (rx !== ry) return rx - ry;
+          return String(x.id).localeCompare(String(y.id));
+        });
+    });
+
+    try {
+      const { error } = await supabase.from("EstimateItem").upsert([
+        { id: a.id, rank: rankB },
+        { id: b.id, rank: rankA },
+      ]);
+      if (error) throw error;
+    } catch (err: any) {
+      console.error("Reorder failed:", err);
+      alert(err?.message || "Reorder failed");
+    }
+  }
+
+  // ---------- Totals using shared computeTotals helper ----------
+
   const totals = useMemo(
     () =>
       computeTotals({
-        // cast to keep TS happy without over-engineering types here
+        // cast to keep TS light for this MVP
         items: items as any,
         estimate: estimate as any,
         settings: settings as any,
@@ -224,7 +401,7 @@ export default function EstimatePage() {
     <div className="mx-auto max-w-4xl p-6">
       {/* Build marker to confirm the new bundle is live */}
       <div className="text-xs text-gray-500 mb-2">
-        Build marker: <strong>PROJECT-ESTIMATE-V6-TOTALS</strong>
+        Build marker: <strong>PROJECT-ESTIMATE-V7-CRUD</strong>
       </div>
 
       <header className="flex items-center justify-between mb-4">
@@ -288,10 +465,23 @@ export default function EstimatePage() {
             )}
           </section>
 
+          {/* Line Items with CRUD */}
           <section className="rounded-lg border p-4">
-            <h3 className="text-lg font-semibold mb-2">Line Items</h3>
+            <div className="flex items-center justify-between mb-2">
+              <h3 className="text-lg font-semibold">Line Items</h3>
+              <button
+                className="rounded bg-blue-600 px-3 py-1 text-sm text-white disabled:opacity-60"
+                onClick={handleAddItem}
+                disabled={creating || !estimate}
+              >
+                {creating ? "Adding…" : "Add line item"}
+              </button>
+            </div>
+
             {items.length === 0 ? (
-              <div className="text-sm text-gray-600">No items yet.</div>
+              <div className="text-sm text-gray-600">
+                No items yet. Click &ldquo;Add line item&rdquo; to get started.
+              </div>
             ) : (
               <div className="overflow-x-auto">
                 <table className="min-w-full text-sm">
@@ -305,28 +495,162 @@ export default function EstimatePage() {
                       <th className="py-2 pr-3">Unit Cost</th>
                       <th className="py-2 pr-3">Cost</th>
                       <th className="py-2 pr-3">Flags</th>
+                      <th className="py-2 pr-3">Rank</th>
+                      <th className="py-2 pr-3">Actions</th>
                     </tr>
                   </thead>
                   <tbody>
                     {items.map((it, idx) => {
                       const cost = (it.quantity ?? 0) * (it.unitCost ?? 0);
+                      const disabled = savingId === it.id || deletingId === it.id;
                       return (
                         <tr key={it.id} className="border-b last:border-0">
-                          <td className="py-2 pr-3">{it.rank ?? idx + 1}</td>
+                          <td className="py-2 pr-3">{idx + 1}</td>
                           <td className="py-2 pr-3">{it.kind}</td>
-                          <td className="py-2 pr-3">{it.description}</td>
-                          <td className="py-2 pr-3">{it.unit}</td>
-                          <td className="py-2 pr-3">{it.quantity}</td>
+                          <td className="py-2 pr-3 max-w-xs">
+                            <div className="truncate" title={it.description}>
+                              {it.description}
+                            </div>
+                          </td>
                           <td className="py-2 pr-3">
-                            ${(it.unitCost ?? 0).toFixed(2)}
+                            <input
+                              className="w-16 rounded border px-1 py-0.5 text-xs"
+                              value={it.unit}
+                              onChange={(e) =>
+                                updateLocalItem(it.id, "unit", e.target.value)
+                              }
+                              disabled={disabled}
+                            />
+                          </td>
+                          <td className="py-2 pr-3">
+                            <input
+                              type="number"
+                              className="w-20 rounded border px-1 py-0.5 text-xs"
+                              value={it.quantity ?? 0}
+                              onChange={(e) =>
+                                updateLocalItem(
+                                  it.id,
+                                  "quantity",
+                                  Number(e.target.value || 0)
+                                )
+                              }
+                              disabled={disabled}
+                            />
+                          </td>
+                          <td className="py-2 pr-3">
+                            <input
+                              type="number"
+                              step="0.01"
+                              className="w-24 rounded border px-1 py-0.5 text-xs"
+                              value={it.unitCost ?? 0}
+                              onChange={(e) =>
+                                updateLocalItem(
+                                  it.id,
+                                  "unitCost",
+                                  Number(e.target.value || 0)
+                                )
+                              }
+                              disabled={disabled}
+                            />
                           </td>
                           <td className="py-2 pr-3 font-medium">
                             ${cost.toFixed(2)}
                           </td>
                           <td className="py-2 pr-3">
-                            {(it.isMaterial ? "M" : "") +
-                              (it.isLabor ? " L" : "") +
-                              (it.isEquipment ? " E" : "")}
+                            <label className="mr-2 inline-flex items-center gap-1 text-xs">
+                              <input
+                                type="checkbox"
+                                checked={!!it.isMaterial}
+                                onChange={(e) =>
+                                  updateLocalItem(
+                                    it.id,
+                                    "isMaterial",
+                                    e.target.checked
+                                  )
+                                }
+                                disabled={disabled}
+                              />
+                              M
+                            </label>
+                            <label className="mr-2 inline-flex items-center gap-1 text-xs">
+                              <input
+                                type="checkbox"
+                                checked={!!it.isLabor}
+                                onChange={(e) =>
+                                  updateLocalItem(
+                                    it.id,
+                                    "isLabor",
+                                    e.target.checked
+                                  )
+                                }
+                                disabled={disabled}
+                              />
+                              L
+                            </label>
+                            <label className="inline-flex items-center gap-1 text-xs">
+                              <input
+                                type="checkbox"
+                                checked={!!it.isEquipment}
+                                onChange={(e) =>
+                                  updateLocalItem(
+                                    it.id,
+                                    "isEquipment",
+                                    e.target.checked
+                                  )
+                                }
+                                disabled={disabled}
+                              />
+                              E
+                            </label>
+                          </td>
+                          <td className="py-2 pr-3">
+                            <input
+                              type="number"
+                              className="w-16 rounded border px-1 py-0.5 text-xs"
+                              value={it.rank ?? idx + 1}
+                              onChange={(e) =>
+                                updateLocalItem(
+                                  it.id,
+                                  "rank",
+                                  e.target.value === ""
+                                    ? null
+                                    : Number(e.target.value)
+                                )
+                              }
+                              disabled={disabled}
+                            />
+                          </td>
+                          <td className="py-2 pr-3 space-x-1 whitespace-nowrap text-xs">
+                            <button
+                              className="rounded border px-1 py-0.5"
+                              onClick={() => handleMoveItem(it.id, "up")}
+                              disabled={disabled || idx === 0}
+                              title="Move up"
+                            >
+                              ↑
+                            </button>
+                            <button
+                              className="rounded border px-1 py-0.5"
+                              onClick={() => handleMoveItem(it.id, "down")}
+                              disabled={disabled || idx === items.length - 1}
+                              title="Move down"
+                            >
+                              ↓
+                            </button>
+                            <button
+                              className="rounded border px-2 py-0.5"
+                              onClick={() => handleSaveItem(it.id)}
+                              disabled={disabled}
+                            >
+                              {savingId === it.id ? "Saving…" : "Save"}
+                            </button>
+                            <button
+                              className="rounded border border-red-300 px-2 py-0.5 text-red-700"
+                              onClick={() => handleDeleteItem(it.id)}
+                              disabled={disabled}
+                            >
+                              {deletingId === it.id ? "Deleting…" : "Delete"}
+                            </button>
                           </td>
                         </tr>
                       );
@@ -337,6 +661,7 @@ export default function EstimatePage() {
             )}
           </section>
 
+          {/* Totals */}
           <section className="rounded-lg border p-4">
             <h3 className="text-lg font-semibold mb-2">Totals (quick view)</h3>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm">
