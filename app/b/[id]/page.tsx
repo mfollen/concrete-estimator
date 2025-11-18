@@ -118,22 +118,24 @@ export default function EstimatePage() {
         if (!isMounted) return;
         setEstimate(est as Estimate | null);
 
-        // 3) Items via RPC (no ORDER BY in SQL; sort in JS)
+        // 3) Estimate items — NO SQL ORDER BY "rank" (we sort in JS)
         if (est?.id) {
-          const { data: its, error: itsErr } = await supabase.rpc(
-            "list_estimate_items",
-            { p_estimate_id: est.id }
-          );
+          const { data: its, error: itsErr } = await supabase
+            .from("EstimateItem")
+            .select("*")
+            .eq("estimateId", est.id);
           if (itsErr) throw itsErr;
           if (!isMounted) return;
 
           const sorted = ((its as any[]) ?? [])
             .slice()
             .sort((a, b) => {
-              const ra = a?.rank ?? 0;
-              const rb = b?.rank ?? 0;
+              const ra =
+                a?.rank == null ? Number.MAX_SAFE_INTEGER : (a.rank as number);
+              const rb =
+                b?.rank == null ? Number.MAX_SAFE_INTEGER : (b.rank as number);
               if (ra !== rb) return ra - rb;
-              // stable tiebreaker
+              // stable tiebreaker by id
               return String(a?.id ?? "").localeCompare(String(b?.id ?? ""));
             });
 
@@ -145,12 +147,23 @@ export default function EstimatePage() {
 
         // 4) Settings / Tax / Tiers (fetch raw; sort tiers client-side)
         if (p?.orgId) {
-          const [{ data: s, error: sErr }, { data: t, error: tErr }, { data: tr, error: trErr }] =
-            await Promise.all([
-              supabase.from("OrgSettings").select("*").eq("orgId", p.orgId).maybeSingle(),
-              supabase.from("TaxScope").select("*").eq("orgId", p.orgId).maybeSingle(),
-              supabase.from("MarkupTier").select("*").eq("orgId", p.orgId),
-            ]);
+          const [
+            { data: s, error: sErr },
+            { data: t, error: tErr },
+            { data: tr, error: trErr },
+          ] = await Promise.all([
+            supabase
+              .from("OrgSettings")
+              .select("*")
+              .eq("orgId", p.orgId)
+              .maybeSingle(),
+            supabase
+              .from("TaxScope")
+              .select("*")
+              .eq("orgId", p.orgId)
+              .maybeSingle(),
+            supabase.from("MarkupTier").select("*").eq("orgId", p.orgId),
+          ]);
           if (sErr) throw sErr;
           if (tErr) throw tErr;
           if (trErr) throw trErr;
@@ -246,7 +259,7 @@ export default function EstimatePage() {
     <div className="mx-auto max-w-4xl p-6">
       {/* Build marker to confirm the new bundle is live */}
       <div className="text-xs text-gray-500 mb-2">
-        Build marker: <strong>PROJECT-ESTIMATE-V3-RPC-FORCE</strong>
+        Build marker: <strong>PROJECT-ESTIMATE-V5-NORANK</strong>
       </div>
 
       <header className="flex items-center justify-between mb-4">
