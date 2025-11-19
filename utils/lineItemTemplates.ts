@@ -1,0 +1,170 @@
+// utils/lineItemTemplates.ts
+
+export type LineItemTemplate = {
+  id: string;
+  label: string;        // What shows in the dropdown
+  kind: string;         // Maps to EstimateItem.kind
+  description: string;  // Maps to EstimateItem.description
+  unit: "SF" | "LF" | "CY" | "EA";
+  defaultUnitCost: number;
+  defaultQuantity?: number;
+  isMaterial?: boolean;
+  isLabor?: boolean;
+  isEquipment?: boolean;
+};
+
+export const LINE_ITEM_TEMPLATES: LineItemTemplate[] = [
+  {
+    id: "tpl_sidewalk_4",
+    label: 'Sidewalk 4" @ $9/SF',
+    kind: "SIDEWALK",
+    description: 'Sidewalk 4" thick',
+    unit: "SF",
+    defaultUnitCost: 9,
+    defaultQuantity: 1000,
+    isMaterial: true,
+    isLabor: true,
+  },
+  {
+    id: "tpl_sidewalk_5",
+    label: 'Sidewalk 5" @ $10/SF',
+    kind: "SIDEWALK",
+    description: 'Sidewalk 5" thick',
+    unit: "SF",
+    defaultUnitCost: 10,
+    defaultQuantity: 1000,
+    isMaterial: true,
+    isLabor: true,
+  },
+  {
+    id: "tpl_sidewalk_6",
+    label: 'Sidewalk 6" @ $11/SF',
+    kind: "SIDEWALK",
+    description: 'Sidewalk 6" thick',
+    unit: "SF",
+    defaultUnitCost: 11,
+    defaultQuantity: 1000,
+    isMaterial: true,
+    isLabor: true,
+  },
+  {
+    id: "tpl_slab_4",
+    label: 'Slab 4" @ $9.50/SF',
+    kind: "FLOOR_SLAB",
+    description: '4" slab on grade w/ mesh',
+    unit: "SF",
+    defaultUnitCost: 9.5,
+    defaultQuantity: 2000,
+    isMaterial: true,
+    isLabor: true,
+  },
+  {
+    id: "tpl_slab_6",
+    label: 'Slab 6" @ $10/SF',
+    kind: "FLOOR_SLAB",
+    description: '6" slab on grade w/ mesh',
+    unit: "SF",
+    defaultUnitCost: 10,
+    defaultQuantity: 2000,
+    isMaterial: true,
+    isLabor: true,
+  },
+  {
+    id: "tpl_slab_8",
+    label: 'Slab 8" @ $12/SF',
+    kind: "FLOOR_SLAB",
+    description: '8" slab on grade w/ rebar',
+    unit: "SF",
+    defaultUnitCost: 12,
+    defaultQuantity: 2000,
+    isMaterial: true,
+    isLabor: true,
+  },
+  {
+    id: "tpl_curb_6",
+    label: '6" Curb @ $35/LF',
+    kind: "SIX_INCH_CURB",
+    description: '6" curb',
+    unit: "LF",
+    defaultUnitCost: 35,
+    defaultQuantity: 150,
+    isMaterial: true,
+    isLabor: true,
+  },
+  {
+    id: "tpl_cg_std",
+    label: "Curb & Gutter @ $38/LF",
+    kind: "CURB_AND_GUTTER",
+    description: "Standard curb & gutter",
+    unit: "LF",
+    defaultUnitCost: 38,
+    defaultQuantity: 150,
+    isMaterial: true,
+    isLabor: true,
+  },
+  {
+    id: "tpl_cg_hd",
+    label: "Heavy-Duty C&G @ $42/LF",
+    kind: "CURB_AND_GUTTER",
+    description: "Heavy-duty curb & gutter",
+    unit: "LF",
+    defaultUnitCost: 42,
+    defaultQuantity: 120,
+    isMaterial: true,
+    isLabor: true,
+  },
+  {
+    id: "tpl_apron_6",
+    label: 'Apron 6" HD @ $12/SF',
+    kind: "APRON",
+    description: '6" heavy-duty apron',
+    unit: "SF",
+    defaultUnitCost: 12,
+    defaultQuantity: 600,
+    isMaterial: true,
+    isLabor: true,
+  },
+  {
+    id: "tpl_drive_thru_8",
+    label: 'Drive-Thru 8" @ $12/SF',
+    kind: "DRIVE_THRU",
+    description: '8" drive-thru lane',
+    unit: "SF",
+    defaultUnitCost: 12,
+    defaultQuantity: 2000,
+    isMaterial: true,
+    isLabor: true,
+  },
+  {
+    id: "tpl_footing_2x1",
+    label: "Footing 2' x 1'",
+    kind: "FOUNDATION",
+    description: "2' x 1' continuous footing",
+    unit: "LF",
+    defaultUnitCost: 0, // you can fill real pricing later
+    defaultQuantity: 230,
+    isMaterial: true,
+    isLabor: true,
+  },
+  {
+    id: "tpl_foundation_wall_8",
+    label: 'Foundation wall 8" (8\' high)',
+    kind: "FOUNDATION",
+    description: '8" foundation wall, 8\' high',
+    unit: "SF",
+    defaultUnitCost: 0,
+    isMaterial: true,
+    isLabor: true,
+  },
+  {
+    id: "tpl_rebar_ton",
+    label: "Rebar Installed (per ton)",
+    kind: "REBAR",
+    description: "Rebar supply & install, per ton",
+    unit: "EA", // you can change this if you prefer
+    defaultUnitCost: 4000,
+    defaultQuantity: 1,
+    isMaterial: true,
+    isLabor: true,
+  },
+];
