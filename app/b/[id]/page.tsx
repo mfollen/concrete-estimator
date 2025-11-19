@@ -4,7 +4,6 @@ import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import { supabase } from "../../../lib/supabaseClient";
-import { LINE_ITEM_TEMPLATES } from "../../../utils/lineItemTemplates";
 
 // ------- Lightweight shapes (for editor hints only)
 type Project = {
@@ -75,11 +74,265 @@ type MarkupTier = {
   rank: number;
 };
 
+// Template metadata for dropdown
+type LineItemTemplate = {
+  id: string;
+  group: "SYSTEM" | "MATERIAL" | "LABOR";
+  label: string;
+  kind: string;
+  description: string;
+  unit: string;
+  defaultQuantity: number;
+  defaultUnitCost: number;
+  isMaterial?: boolean;
+  isLabor?: boolean;
+  isEquipment?: boolean;
+};
+
+// Very lightweight set derived from your CSVs for MVP.
+// We can expand later, but this gives you real options now.
+const LINE_ITEM_TEMPLATES: LineItemTemplate[] = [
+  // --- System / turnkey items (from line_item_templates_template.csv) ---
+  {
+    id: "sys-sidewalk-4-9",
+    group: "SYSTEM",
+    label: 'Sidewalk 4" @ $9/SF',
+    kind: "SIDEWALK",
+    description: 'Sidewalk 4" @ $9/SF',
+    unit: "SF",
+    defaultQuantity: 100, // arbitrary MVP default
+    defaultUnitCost: 9,
+    isMaterial: true,
+    isLabor: true,
+  },
+  {
+    id: "sys-sidewalk-5-10",
+    group: "SYSTEM",
+    label: 'Sidewalk 5" @ $10/SF',
+    kind: "SIDEWALK",
+    description: 'Sidewalk 5" @ $10/SF',
+    unit: "SF",
+    defaultQuantity: 100,
+    defaultUnitCost: 10,
+    isMaterial: true,
+    isLabor: true,
+  },
+  {
+    id: "sys-sidewalk-6-11",
+    group: "SYSTEM",
+    label: 'Sidewalk 6" @ $11/SF',
+    kind: "SIDEWALK",
+    description: 'Sidewalk 6" @ $11/SF',
+    unit: "SF",
+    defaultQuantity: 100,
+    defaultUnitCost: 11,
+    isMaterial: true,
+    isLabor: true,
+  },
+  {
+    id: "sys-slab-4-950",
+    group: "SYSTEM",
+    label: 'Slab 4" @ $9.50/SF',
+    kind: "SLAB",
+    description: 'Slab 4" @ $9.50/SF',
+    unit: "SF",
+    defaultQuantity: 1000,
+    defaultUnitCost: 9.5,
+    isMaterial: true,
+    isLabor: true,
+  },
+  {
+    id: "sys-slab-6-10",
+    group: "SYSTEM",
+    label: 'Slab 6" @ $10/SF',
+    kind: "SLAB",
+    description: 'Slab 6" @ $10/SF',
+    unit: "SF",
+    defaultQuantity: 1000,
+    defaultUnitCost: 10,
+    isMaterial: true,
+    isLabor: true,
+  },
+  {
+    id: "sys-slab-8-12",
+    group: "SYSTEM",
+    label: 'Slab 8" @ $12/SF',
+    kind: "SLAB",
+    description: 'Slab 8" @ $12/SF',
+    unit: "SF",
+    defaultQuantity: 1000,
+    defaultUnitCost: 12,
+    isMaterial: true,
+    isLabor: true,
+  },
+  {
+    id: "sys-curb-6-35",
+    group: "SYSTEM",
+    label: '6" Curb @ $35/LF',
+    kind: "CURB",
+    description: '6" Curb @ $35/LF',
+    unit: "LF",
+    defaultQuantity: 200,
+    defaultUnitCost: 35,
+    isMaterial: true,
+    isLabor: true,
+  },
+  {
+    id: "sys-curb-gutter-38",
+    group: "SYSTEM",
+    label: "Curb & Gutter @ $38/LF",
+    kind: "CURB",
+    description: "Curb & Gutter @ $38/LF",
+    unit: "LF",
+    defaultQuantity: 200,
+    defaultUnitCost: 38,
+    isMaterial: true,
+    isLabor: true,
+  },
+
+  // --- Materials (from materials_template.csv) ---
+  {
+    id: "mat-concrete-3000",
+    group: "MATERIAL",
+    label: "Concrete 3000 PSI (CY)",
+    kind: "MATERIAL",
+    description: "Concrete 3000 PSI",
+    unit: "CY",
+    defaultQuantity: 10,
+    defaultUnitCost: 150,
+    isMaterial: true,
+  },
+  {
+    id: "mat-concrete-4000",
+    group: "MATERIAL",
+    label: "Concrete 4000 PSI (CY)",
+    kind: "MATERIAL",
+    description: "Concrete 4000 PSI",
+    unit: "CY",
+    defaultQuantity: 10,
+    defaultUnitCost: 160,
+    isMaterial: true,
+  },
+  {
+    id: "mat-ca6-base-stone",
+    group: "MATERIAL",
+    label: "CA-6 Base Stone (TON)",
+    kind: "MATERIAL",
+    description: "CA-6 (Road/Base) Stone",
+    unit: "TON",
+    defaultQuantity: 10,
+    defaultUnitCost: 30,
+    isMaterial: true,
+  },
+  {
+    id: "mat-rebar-installed-ton",
+    group: "MATERIAL",
+    label: "Rebar (Installed) per Ton",
+    kind: "MATERIAL",
+    description: "Rebar (Installed) per Ton",
+    unit: "TON",
+    defaultQuantity: 1,
+    defaultUnitCost: 4000,
+    isMaterial: true,
+  },
+  {
+    id: "mat-wire-mesh-6x6-w2-9",
+    group: "MATERIAL",
+    label: "Wire Mesh 6x6 W2.9/W2.9 (SF)",
+    kind: "MATERIAL",
+    description: "Wire Mesh 6x6 W2.9/W2.9",
+    unit: "SF",
+    defaultQuantity: 1000,
+    defaultUnitCost: 0.25,
+    isMaterial: true,
+  },
+  {
+    id: "mat-vapor-barrier-10mil",
+    group: "MATERIAL",
+    label: "Vapor Barrier 10 mil (SF)",
+    kind: "MATERIAL",
+    description: "Vapor Barrier 10 mil",
+    unit: "SF",
+    defaultQuantity: 1000,
+    defaultUnitCost: 0.12,
+    isMaterial: true,
+  },
+  {
+    id: "mat-curing-compound",
+    group: "MATERIAL",
+    label: "Curing Compound (SF)",
+    kind: "MATERIAL",
+    description: "Curing Compound",
+    unit: "SF",
+    defaultQuantity: 1000,
+    defaultUnitCost: 0.12,
+    isMaterial: true,
+  },
+  {
+    id: "mat-sealer",
+    group: "MATERIAL",
+    label: "Sealer (SF)",
+    kind: "MATERIAL",
+    description: "Sealer",
+    unit: "SF",
+    defaultQuantity: 1000,
+    defaultUnitCost: 0.2,
+    isMaterial: true,
+  },
+
+  // --- Labor (from labor_rates_template.csv) ---
+  {
+    id: "lab-laborer",
+    group: "LABOR",
+    label: "Laborer @ $95/hr",
+    kind: "LABOR",
+    description: "Laborer",
+    unit: "HR",
+    defaultQuantity: 8,
+    defaultUnitCost: 95,
+    isLabor: true,
+  },
+  {
+    id: "lab-finisher",
+    group: "LABOR",
+    label: "Finisher @ $95/hr",
+    kind: "LABOR",
+    description: "Finisher",
+    unit: "HR",
+    defaultQuantity: 8,
+    defaultUnitCost: 95,
+    isLabor: true,
+  },
+  {
+    id: "lab-operator",
+    group: "LABOR",
+    label: "Operator @ $95/hr",
+    kind: "LABOR",
+    description: "Operator",
+    unit: "HR",
+    defaultQuantity: 8,
+    defaultUnitCost: 95,
+    isLabor: true,
+  },
+  {
+    id: "lab-foreman",
+    group: "LABOR",
+    label: "Foreman @ $95/hr",
+    kind: "LABOR",
+    description: "Foreman",
+    unit: "HR",
+    defaultQuantity: 8,
+    defaultUnitCost: 95,
+    isLabor: true,
+  },
+];
+
 export default function EstimatePage() {
   const params = useParams<{ id: string }>();
   const projectId = params?.id;
 
   const [loading, setLoading] = useState(true);
+  const [savingItems, setSavingItems] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const [project, setProject] = useState<Project | null>(null);
@@ -89,11 +342,11 @@ export default function EstimatePage() {
   const [tax, setTax] = useState<TaxScope | null>(null);
   const [tiers, setTiers] = useState<MarkupTier[]>([]);
 
-  // New: selected template for "Add line item"
-  const [selectedTemplateId, setSelectedTemplateId] = useState(
+  const [selectedTemplateId, setSelectedTemplateId] = useState<string>(
     LINE_ITEM_TEMPLATES[0]?.id ?? ""
   );
 
+  // ----------------- Data load -----------------
   useEffect(() => {
     let isMounted = true;
 
@@ -205,54 +458,135 @@ export default function EstimatePage() {
     };
   }, [projectId]);
 
-  // --- New: Add line item from template ---
-  async function handleAddLineItemFromTemplate() {
-    if (!estimate) {
-      setError("No estimate loaded");
-      return;
-    }
+  // ----------------- Line-item helpers -----------------
 
-    const tpl = LINE_ITEM_TEMPLATES.find((t) => t.id === selectedTemplateId);
-    if (!tpl) {
-      setError("Please select a line item template");
-      return;
-    }
+  function nextRank(): number {
+    if (!items.length) return 1;
+    const maxRank = items.reduce(
+      (max, it) => (it.rank != null && it.rank > max ? it.rank : max),
+      0
+    );
+    return (maxRank || items.length) + 1;
+  }
 
+  function handleItemChange(
+    index: number,
+    field: keyof EstimateItem,
+    value: any
+  ) {
+    setItems((prev) => {
+      const copy = [...prev];
+      const it = { ...copy[index] };
+      (it as any)[field] = value;
+      copy[index] = it;
+      return copy;
+    });
+  }
+
+  async function handleDeleteItem(item: EstimateItem) {
+    if (!item.id) return;
     try {
-      setError(null);
-
-      const nextRank =
-        (items[items.length - 1]?.rank ?? items.length) + 1;
-
-      const { data, error: insertErr } = await supabase
+      setSavingItems(true);
+      const { error: delErr } = await supabase
         .from("EstimateItem")
-        .insert({
-          estimateId: estimate.id,
-          kind: tpl.kind,
-          description: tpl.description,
-          unit: tpl.unit,
-          quantity: tpl.defaultQuantity ?? 0,
-          unitCost: tpl.defaultUnitCost ?? 0,
-          markupPct: null,
-          contingencyPct: null,
-          durationHours: null,
-          isMaterial: tpl.isMaterial ?? true,
-          isLabor: tpl.isLabor ?? true,
-          isEquipment: tpl.isEquipment ?? false,
-          rank: nextRank,
-        })
-        .select("*")
-        .single();
+        .delete()
+        .eq("id", item.id);
+      if (delErr) throw delErr;
 
-      if (insertErr) throw insertErr;
-
-      setItems((prev) => [...prev, data as any]);
+      setItems((prev) => prev.filter((it) => it.id !== item.id));
     } catch (err: any) {
-      console.error("Add line item failed:", err);
+      console.error("Delete line item failed:", err);
       setError(err?.message ?? String(err));
+    } finally {
+      setSavingItems(false);
     }
   }
 
+  async function handleSaveItems() {
+    if (!estimate) return;
+    try {
+      setSavingItems(true);
+      setError(null);
+
+      const payload = items.map((it, idx) => ({
+        id: it.id,
+        estimateId: estimate.id,
+        kind: it.kind,
+        description: it.description,
+        unit: it.unit,
+        quantity: it.quantity ?? 0,
+        unitCost: it.unitCost ?? 0,
+        isMaterial: it.isMaterial ?? false,
+        isLabor: it.isLabor ?? false,
+        isEquipment: it.isEquipment ?? false,
+        rank: it.rank ?? idx + 1,
+      }));
+
+      const { error: upErr } = await supabase
+        .from("EstimateItem")
+        .upsert(payload, { onConflict: "id" });
+      if (upErr) throw upErr;
+    } catch (err: any) {
+      console.error("Save line items failed:", err);
+      setError(err?.message ?? String(err));
+    } finally {
+      setSavingItems(false);
+    }
+  }
+
+  function handleAddFromTemplate() {
+    if (!estimate) {
+      setError("Create an estimate before adding line items.");
+      return;
+    }
+    const tpl = LINE_ITEM_TEMPLATES.find((t) => t.id === selectedTemplateId);
+    if (!tpl) return;
+
+    const newItem: EstimateItem = {
+      id: crypto.randomUUID(), // client-generated UUID; DB PK is uuid
+      estimateId: estimate.id,
+      kind: tpl.kind,
+      description: tpl.description,
+      unit: tpl.unit,
+      quantity: tpl.defaultQuantity,
+      unitCost: tpl.defaultUnitCost,
+      isMaterial: tpl.isMaterial ?? null,
+      isLabor: tpl.isLabor ?? null,
+      isEquipment: tpl.isEquipment ?? null,
+      rank: nextRank(),
+      markupPct: null,
+      contingencyPct: null,
+      durationHours: null,
+    };
+
+    setItems((prev) => [...prev, newItem]);
+  }
+
+  function handleAddBlankItem() {
+    if (!estimate) {
+      setError("Create an estimate before adding line items.");
+      return;
+    }
+    const newItem: EstimateItem = {
+      id: crypto.randomUUID(),
+      estimateId: estimate.id,
+      kind: "CUSTOM",
+      description: "",
+      unit: "EA",
+      quantity: 1,
+      unitCost: 0,
+      isMaterial: null,
+      isLabor: null,
+      isEquipment: null,
+      rank: nextRank(),
+      markupPct: null,
+      contingencyPct: null,
+      durationHours: null,
+    };
+    setItems((prev) => [...prev, newItem]);
+  }
+
+  // ----------------- Totals -----------------
   const totals = useMemo(() => {
     const subtotal = items.reduce(
       (sum, it) => sum + (it.quantity ?? 0) * (it.unitCost ?? 0),
@@ -307,11 +641,12 @@ export default function EstimatePage() {
     };
   }, [items, estimate, settings, tax, tiers]);
 
+  // ----------------- Render -----------------
   return (
-    <div className="mx-auto max-w-4xl p-6">
+    <div className="mx-auto max-w-5xl p-6">
       {/* Build marker to confirm the new bundle is live */}
       <div className="text-xs text-gray-500 mb-2">
-        Build marker: <strong>PROJECT-ESTIMATE-V7-TEMPLATES</strong>
+        Build marker: <strong>PROJECT-ESTIMATE-V7-EDITOR</strong>
       </div>
 
       <header className="flex items-center justify-between mb-4">
@@ -332,7 +667,7 @@ export default function EstimatePage() {
 
       {!loading && !error && project && (
         <div className="space-y-8">
-          {/* Project card */}
+          {/* Project header */}
           <section className="rounded-lg border p-4">
             <h1 className="text-2xl font-bold">{project.name}</h1>
             <p className="text-sm text-gray-600">
@@ -342,7 +677,7 @@ export default function EstimatePage() {
             <p className="text-xs text-gray-400 mt-1">Project ID: {project.id}</p>
           </section>
 
-          {/* Estimate summary card */}
+          {/* Estimate summary */}
           <section className="rounded-lg border p-4">
             <h2 className="text-xl font-semibold mb-2">
               {estimate ? estimate.title : "No estimate yet"}
@@ -377,87 +712,236 @@ export default function EstimatePage() {
             )}
           </section>
 
-          {/* Line items + template selector */}
+          {/* Template picker + line item editor */}
           <section className="rounded-lg border p-4">
-            <h3 className="text-lg font-semibold mb-2">Line Items</h3>
-
-            {/* Template selector + add button */}
-            <div className="flex flex-wrap items-end gap-3 mb-3">
-              <div className="flex flex-col">
-                <label className="text-xs font-semibold text-gray-600 mb-1">
-                  Line item template
+            <div className="flex flex-col md:flex-row md:items-end md:justify-between gap-3 mb-4">
+              <div className="flex-1">
+                <h3 className="text-lg font-semibold mb-1">Add from template</h3>
+                <label className="block text-xs text-gray-500 mb-1">
+                  Choose a system, material, or labor rate to insert a new row.
                 </label>
                 <select
-                  className="border rounded px-2 py-1 text-sm min-w-[260px]"
+                  className="w-full md:w-96 border rounded px-2 py-1 text-sm"
                   value={selectedTemplateId}
                   onChange={(e) => setSelectedTemplateId(e.target.value)}
                 >
-                  {LINE_ITEM_TEMPLATES.map((t) => (
-                    <option key={t.id} value={t.id}>
-                      {t.label}
-                    </option>
-                  ))}
+                  <optgroup label="Systems (turnkey)">
+                    {LINE_ITEM_TEMPLATES.filter(
+                      (t) => t.group === "SYSTEM"
+                    ).map((t) => (
+                      <option key={t.id} value={t.id}>
+                        {t.label}
+                      </option>
+                    ))}
+                  </optgroup>
+                  <optgroup label="Materials">
+                    {LINE_ITEM_TEMPLATES.filter(
+                      (t) => t.group === "MATERIAL"
+                    ).map((t) => (
+                      <option key={t.id} value={t.id}>
+                        {t.label}
+                      </option>
+                    ))}
+                  </optgroup>
+                  <optgroup label="Labor">
+                    {LINE_ITEM_TEMPLATES.filter(
+                      (t) => t.group === "LABOR"
+                    ).map((t) => (
+                      <option key={t.id} value={t.id}>
+                        {t.label}
+                      </option>
+                    ))}
+                  </optgroup>
                 </select>
               </div>
-
-              <button
-                type="button"
-                className="bg-blue-600 text-white text-sm font-medium px-3 py-2 rounded hover:bg-blue-700 disabled:opacity-60"
-                onClick={handleAddLineItemFromTemplate}
-                disabled={!estimate}
-              >
-                Add line item
-              </button>
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  className="bg-blue-600 text-white text-sm px-3 py-2 rounded hover:bg-blue-700"
+                  onClick={handleAddFromTemplate}
+                >
+                  Add line from template
+                </button>
+                <button
+                  type="button"
+                  className="border text-sm px-3 py-2 rounded hover:bg-gray-50"
+                  onClick={handleAddBlankItem}
+                >
+                  Add blank line
+                </button>
+              </div>
             </div>
 
+            <h3 className="text-lg font-semibold mb-2">Line Items</h3>
             {items.length === 0 ? (
-              <div className="text-sm text-gray-600">No items yet.</div>
-            ) : (
-              <div className="overflow-x-auto">
-                <table className="min-w-full text-sm">
-                  <thead>
-                    <tr className="text-left border-b">
-                      <th className="py-2 pr-3">#</th>
-                      <th className="py-2 pr-3">Kind</th>
-                      <th className="py-2 pr-3">Description</th>
-                      <th className="py-2 pr-3">Unit</th>
-                      <th className="py-2 pr-3">Qty</th>
-                      <th className="py-2 pr-3">Unit Cost</th>
-                      <th className="py-2 pr-3">Cost</th>
-                      <th className="py-2 pr-3">Flags</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {items.map((it, idx) => {
-                      const cost = (it.quantity ?? 0) * (it.unitCost ?? 0);
-                      return (
-                        <tr key={it.id} className="border-b last:border-0">
-                          <td className="py-2 pr-3">{it.rank ?? idx + 1}</td>
-                          <td className="py-2 pr-3">{it.kind}</td>
-                          <td className="py-2 pr-3">{it.description}</td>
-                          <td className="py-2 pr-3">{it.unit}</td>
-                          <td className="py-2 pr-3">{it.quantity}</td>
-                          <td className="py-2 pr-3">
-                            ${(it.unitCost ?? 0).toFixed(2)}
-                          </td>
-                          <td className="py-2 pr-3 font-medium">
-                            ${cost.toFixed(2)}
-                          </td>
-                          <td className="py-2 pr-3">
-                            {(it.isMaterial ? "M" : "") +
-                              (it.isLabor ? " L" : "") +
-                              (it.isEquipment ? " E" : "")}
-                          </td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
+              <div className="text-sm text-gray-600">
+                No items yet. Use the buttons above to add rows.
               </div>
+            ) : (
+              <>
+                <div className="overflow-x-auto">
+                  <table className="min-w-full text-sm">
+                    <thead>
+                      <tr className="text-left border-b">
+                        <th className="py-2 pr-3">#</th>
+                        <th className="py-2 pr-3">Kind</th>
+                        <th className="py-2 pr-3">Description</th>
+                        <th className="py-2 pr-3">Unit</th>
+                        <th className="py-2 pr-3">Qty</th>
+                        <th className="py-2 pr-3">Unit Cost</th>
+                        <th className="py-2 pr-3">Cost</th>
+                        <th className="py-2 pr-3">Flags</th>
+                        <th className="py-2 pr-3"></th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {items.map((it, idx) => {
+                        const cost =
+                          (it.quantity ?? 0) * (it.unitCost ?? 0);
+                        return (
+                          <tr key={it.id} className="border-b last:border-0">
+                            <td className="py-2 pr-3">{it.rank ?? idx + 1}</td>
+                            <td className="py-2 pr-3">
+                              <input
+                                className="w-24 border rounded px-1 py-0.5"
+                                value={it.kind}
+                                onChange={(e) =>
+                                  handleItemChange(idx, "kind", e.target.value)
+                                }
+                              />
+                            </td>
+                            <td className="py-2 pr-3">
+                              <input
+                                className="w-64 border rounded px-1 py-0.5"
+                                value={it.description ?? ""}
+                                onChange={(e) =>
+                                  handleItemChange(
+                                    idx,
+                                    "description",
+                                    e.target.value
+                                  )
+                                }
+                              />
+                            </td>
+                            <td className="py-2 pr-3">
+                              <input
+                                className="w-14 border rounded px-1 py-0.5"
+                                value={it.unit}
+                                onChange={(e) =>
+                                  handleItemChange(idx, "unit", e.target.value)
+                                }
+                              />
+                            </td>
+                            <td className="py-2 pr-3">
+                              <input
+                                type="number"
+                                className="w-20 border rounded px-1 py-0.5 text-right"
+                                value={it.quantity ?? 0}
+                                onChange={(e) =>
+                                  handleItemChange(
+                                    idx,
+                                    "quantity",
+                                    Number(e.target.value || "0")
+                                  )
+                                }
+                              />
+                            </td>
+                            <td className="py-2 pr-3">
+                              <input
+                                type="number"
+                                step="0.01"
+                                className="w-24 border rounded px-1 py-0.5 text-right"
+                                value={it.unitCost ?? 0}
+                                onChange={(e) =>
+                                  handleItemChange(
+                                    idx,
+                                    "unitCost",
+                                    Number(e.target.value || "0")
+                                  )
+                                }
+                              />
+                            </td>
+                            <td className="py-2 pr-3 font-medium">
+                              ${cost.toFixed(2)}
+                            </td>
+                            <td className="py-2 pr-3">
+                              <label className="mr-2">
+                                <input
+                                  type="checkbox"
+                                  className="mr-1"
+                                  checked={!!it.isMaterial}
+                                  onChange={(e) =>
+                                    handleItemChange(
+                                      idx,
+                                      "isMaterial",
+                                      e.target.checked
+                                    )
+                                  }
+                                />
+                                M
+                              </label>
+                              <label className="mr-2">
+                                <input
+                                  type="checkbox"
+                                  className="mr-1"
+                                  checked={!!it.isLabor}
+                                  onChange={(e) =>
+                                    handleItemChange(
+                                      idx,
+                                      "isLabor",
+                                      e.target.checked
+                                    )
+                                  }
+                                />
+                                L
+                              </label>
+                              <label>
+                                <input
+                                  type="checkbox"
+                                  className="mr-1"
+                                  checked={!!it.isEquipment}
+                                  onChange={(e) =>
+                                    handleItemChange(
+                                      idx,
+                                      "isEquipment",
+                                      e.target.checked
+                                    )
+                                  }
+                                />
+                                E
+                              </label>
+                            </td>
+                            <td className="py-2 pr-3">
+                              <button
+                                type="button"
+                                className="text-xs text-red-600 hover:underline"
+                                onClick={() => handleDeleteItem(it)}
+                              >
+                                Delete
+                              </button>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+
+                <div className="mt-3 flex justify-end">
+                  <button
+                    type="button"
+                    className="bg-blue-600 text-white text-sm px-4 py-2 rounded hover:bg-blue-700 disabled:opacity-60"
+                    onClick={handleSaveItems}
+                    disabled={savingItems}
+                  >
+                    {savingItems ? "Saving…" : "Save line items"}
+                  </button>
+                </div>
+              </>
             )}
           </section>
 
-          {/* Totals */}
+          {/* Totals panel */}
           <section className="rounded-lg border p-4">
             <h3 className="text-lg font-semibold mb-2">Totals (quick view)</h3>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm">
@@ -494,7 +978,6 @@ export default function EstimatePage() {
             </div>
           </section>
 
-          {/* Debug footer */}
           <section className="rounded-lg border p-4 text-xs text-gray-500">
             <div>
               Org Settings: {settings ? "loaded" : "—"} • Tax Scope:{" "}
