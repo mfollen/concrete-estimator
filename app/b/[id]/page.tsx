@@ -41,7 +41,7 @@ type EstimateItem = {
   durationHours?: number | null;
   isMaterial?: boolean | null;
   isLabor?: boolean | null;
-  // NOTE: no rank / isEquipment persistence for now (schema doesn’t have them)
+  // NOTE: we intentionally do NOT use isEquipment / rank here
 };
 
 type OrgSettings = {
@@ -74,6 +74,46 @@ type MarkupTier = {
   rank: number;
 };
 
+// Simple templates for "what kind of line item am I adding?"
+const NEW_ITEM_TEMPLATES = [
+  {
+    key: "GENERIC",
+    label: "Generic line item",
+    kind: "LINE",
+    description: "New line item",
+    unit: "EA",
+    isMaterial: true,
+    isLabor: true,
+  },
+  {
+    key: "SLAB",
+    label: 'Slab – 6" slab on grade',
+    kind: "SLAB",
+    description: '6" slab on grade',
+    unit: "SF",
+    isMaterial: true,
+    isLabor: true,
+  },
+  {
+    key: "FOOTING",
+    label: 'Footing – 24"x12" strip footing',
+    kind: "FOOTING",
+    description: 'Strip footing 24"x12"',
+    unit: "LF",
+    isMaterial: true,
+    isLabor: true,
+  },
+  {
+    key: "WALL",
+    label: 'Wall – 8" formed wall',
+    kind: "WALL",
+    description: '8" formed wall',
+    unit: "SF",
+    isMaterial: true,
+    isLabor: true,
+  },
+];
+
 export default function EstimatePage() {
   const params = useParams<{ id: string }>();
   const projectId = params?.id;
@@ -92,6 +132,8 @@ export default function EstimatePage() {
   const [savingId, setSavingId] = useState<string | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
+  const [selectedTemplateKey, setSelectedTemplateKey] =
+    useState<string>("GENERIC");
 
   useEffect(() => {
     let isMounted = true;
@@ -123,7 +165,7 @@ export default function EstimatePage() {
         if (!isMounted) return;
         setEstimate(est as Estimate | null);
 
-        // 3) Estimate items (no rank column; sort stably by id for now)
+        // 3) Estimate items (sort stably by id for now)
         if (est?.id) {
           const { data: its, error: itsErr } = await supabase
             .from("EstimateItem")
@@ -259,18 +301,22 @@ export default function EstimatePage() {
     }
     setCreating(true);
     try {
+      const template =
+        NEW_ITEM_TEMPLATES.find((t) => t.key === selectedTemplateKey) ??
+        NEW_ITEM_TEMPLATES[0];
+
       const { data, error } = await supabase
         .from("EstimateItem")
         .insert({
           estimateId: estimate.id,
-          kind: "LINE",
-          description: "New line item",
-          unit: "EA",
+          kind: template.kind,
+          description: template.description,
+          unit: template.unit,
           quantity: 0,
           unitCost: 0,
-          isMaterial: true,
-          isLabor: true,
-          // NOTE: no isEquipment / rank here – your schema doesn’t have them
+          isMaterial: template.isMaterial ?? true,
+          isLabor: template.isLabor ?? true,
+          // NOTE: we intentionally do NOT send isEquipment / rank
         })
         .select("*")
         .single();
@@ -313,7 +359,6 @@ export default function EstimatePage() {
   const totals = useMemo(
     () =>
       computeTotals({
-        // cast to keep TS light for this MVP
         items: items as any,
         estimate: estimate as any,
         settings: settings as any,
@@ -332,7 +377,7 @@ export default function EstimatePage() {
     <div className="mx-auto max-w-4xl p-6">
       {/* Build marker to confirm the new bundle is live */}
       <div className="text-xs text-gray-500 mb-2">
-        Build marker: <strong>PROJECT-ESTIMATE-V8-NORANK-NOEQUIP</strong>
+        Build marker: <strong>PROJECT-ESTIMATE-V9-TEMPLATES</strong>
       </div>
 
       <header className="flex items-center justify-between mb-4">
@@ -398,20 +443,35 @@ export default function EstimatePage() {
 
           {/* Line Items with CRUD */}
           <section className="rounded-lg border p-4">
-            <div className="flex items-center justify-between mb-2">
+            <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between mb-2">
               <h3 className="text-lg font-semibold">Line Items</h3>
-              <button
-                className="rounded bg-blue-600 px-3 py-1 text-sm text-white disabled:opacity-60"
-                onClick={handleAddItem}
-                disabled={creating || !estimate}
-              >
-                {creating ? "Adding…" : "Add line item"}
-              </button>
+              <div className="flex flex-wrap items-center gap-2">
+                <select
+                  className="rounded border px-2 py-1 text-sm"
+                  value={selectedTemplateKey}
+                  onChange={(e) => setSelectedTemplateKey(e.target.value)}
+                  disabled={creating || !estimate}
+                >
+                  {NEW_ITEM_TEMPLATES.map((tpl) => (
+                    <option key={tpl.key} value={tpl.key}>
+                      {tpl.label}
+                    </option>
+                  ))}
+                </select>
+                <button
+                  className="rounded bg-blue-600 px-3 py-1 text-sm text-white disabled:opacity-60"
+                  onClick={handleAddItem}
+                  disabled={creating || !estimate}
+                >
+                  {creating ? "Adding…" : "Add line item"}
+                </button>
+              </div>
             </div>
 
             {items.length === 0 ? (
               <div className="text-sm text-gray-600">
-                No items yet. Click &ldquo;Add line item&rdquo; to get started.
+                No items yet. Choose a template and click
+                &nbsp;&ldquo;Add line item&rdquo; to get started.
               </div>
             ) : (
               <div className="overflow-x-auto">
