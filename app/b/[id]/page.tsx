@@ -4,7 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import { supabase } from "../../../lib/supabaseClient";
-import { computeTotals } from "../../../utils/estimate";
+import { LINE_ITEM_TEMPLATES } from "../../../utils/lineItemTemplates";
 
 // ------- Lightweight shapes (for editor hints only)
 type Project = {
@@ -41,7 +41,8 @@ type EstimateItem = {
   durationHours?: number | null;
   isMaterial?: boolean | null;
   isLabor?: boolean | null;
-  // NOTE: we intentionally do NOT use isEquipment / rank here
+  isEquipment?: boolean | null;
+  rank?: number | null;
 };
 
 type OrgSettings = {
@@ -74,46 +75,6 @@ type MarkupTier = {
   rank: number;
 };
 
-// Simple templates for "what kind of line item am I adding?"
-const NEW_ITEM_TEMPLATES = [
-  {
-    key: "GENERIC",
-    label: "Generic line item",
-    kind: "LINE",
-    description: "New line item",
-    unit: "EA",
-    isMaterial: true,
-    isLabor: true,
-  },
-  {
-    key: "SLAB",
-    label: 'Slab – 6" slab on grade',
-    kind: "SLAB",
-    description: '6" slab on grade',
-    unit: "SF",
-    isMaterial: true,
-    isLabor: true,
-  },
-  {
-    key: "FOOTING",
-    label: 'Footing – 24"x12" strip footing',
-    kind: "FOOTING",
-    description: 'Strip footing 24"x12"',
-    unit: "LF",
-    isMaterial: true,
-    isLabor: true,
-  },
-  {
-    key: "WALL",
-    label: 'Wall – 8" formed wall',
-    kind: "WALL",
-    description: '8" formed wall',
-    unit: "SF",
-    isMaterial: true,
-    isLabor: true,
-  },
-];
-
 export default function EstimatePage() {
   const params = useParams<{ id: string }>();
   const projectId = params?.id;
@@ -128,12 +89,10 @@ export default function EstimatePage() {
   const [tax, setTax] = useState<TaxScope | null>(null);
   const [tiers, setTiers] = useState<MarkupTier[]>([]);
 
-  // Small UI states for CRUD
-  const [savingId, setSavingId] = useState<string | null>(null);
-  const [deletingId, setDeletingId] = useState<string | null>(null);
-  const [creating, setCreating] = useState(false);
-  const [selectedTemplateKey, setSelectedTemplateKey] =
-    useState<string>("GENERIC");
+  // New: selected template for "Add line item"
+  const [selectedTemplateId, setSelectedTemplateId] = useState(
+    LINE_ITEM_TEMPLATES[0]?.id ?? ""
+  );
 
   useEffect(() => {
     let isMounted = true;
@@ -165,20 +124,24 @@ export default function EstimatePage() {
         if (!isMounted) return;
         setEstimate(est as Estimate | null);
 
-        // 3) Estimate items (sort stably by id for now)
+        // 3) Items via RPC (no ORDER BY in SQL; sort in JS)
         if (est?.id) {
-          const { data: its, error: itsErr } = await supabase
-            .from("EstimateItem")
-            .select("*")
-            .eq("estimateId", est.id);
+          const { data: its, error: itsErr } = await supabase.rpc(
+            "list_estimate_items",
+            { p_estimate_id: est.id }
+          );
           if (itsErr) throw itsErr;
           if (!isMounted) return;
 
           const sorted = ((its as any[]) ?? [])
             .slice()
-            .sort((a, b) =>
-              String(a?.id ?? "").localeCompare(String(b?.id ?? ""))
-            );
+            .sort((a, b) => {
+              const ra = a?.rank ?? 0;
+              const rb = b?.rank ?? 0;
+              if (ra !== rb) return ra - rb;
+              // stable tiebreaker
+              return String(a?.id ?? "").localeCompare(String(b?.id ?? ""));
+            });
 
           setItems(sorted as EstimateItem[]);
         } else {
@@ -242,142 +205,113 @@ export default function EstimatePage() {
     };
   }, [projectId]);
 
-  // ---------- CRUD handlers for EstimateItem ----------
-
-  function updateLocalItem<K extends keyof EstimateItem>(
-    id: string,
-    key: K,
-    value: EstimateItem[K]
-  ) {
-    setItems((prev) =>
-      prev.map((it) => (it.id === id ? { ...it, [key]: value } : it))
-    );
-  }
-
-  async function handleSaveItem(id: string) {
-    const current = items.find((it) => it.id === id);
-    if (!current) return;
-    setSavingId(id);
-    try {
-      // Only send columns we KNOW exist in the Supabase schema
-      const payload: Partial<EstimateItem> = {
-        unit: current.unit,
-        quantity: current.quantity,
-        unitCost: current.unitCost,
-        isMaterial: current.isMaterial,
-        isLabor: current.isLabor,
-      };
-
-      const { data, error: updErr } = await supabase
-        .from("EstimateItem")
-        .update(payload)
-        .eq("id", id)
-        .select("*")
-        .maybeSingle();
-
-      if (updErr) throw updErr;
-
-      const updated = (data || current) as EstimateItem;
-      setItems((prev) =>
-        prev
-          .map((it) => (it.id === id ? updated : it))
-          .slice()
-          .sort((a, b) =>
-            String(a.id ?? "").localeCompare(String(b.id ?? ""))
-          )
-      );
-    } catch (err: any) {
-      console.error("Save item failed:", err);
-      alert(err?.message || "Save failed");
-    } finally {
-      setSavingId(null);
-    }
-  }
-
-  async function handleAddItem() {
-    if (!estimate?.id) {
-      alert("No estimate found for this project.");
+  // --- New: Add line item from template ---
+  async function handleAddLineItemFromTemplate() {
+    if (!estimate) {
+      setError("No estimate loaded");
       return;
     }
-    setCreating(true);
-    try {
-      const template =
-        NEW_ITEM_TEMPLATES.find((t) => t.key === selectedTemplateKey) ??
-        NEW_ITEM_TEMPLATES[0];
 
-      const { data, error } = await supabase
+    const tpl = LINE_ITEM_TEMPLATES.find((t) => t.id === selectedTemplateId);
+    if (!tpl) {
+      setError("Please select a line item template");
+      return;
+    }
+
+    try {
+      setError(null);
+
+      const nextRank =
+        (items[items.length - 1]?.rank ?? items.length) + 1;
+
+      const { data, error: insertErr } = await supabase
         .from("EstimateItem")
         .insert({
           estimateId: estimate.id,
-          kind: template.kind,
-          description: template.description,
-          unit: template.unit,
-          quantity: 0,
-          unitCost: 0,
-          isMaterial: template.isMaterial ?? true,
-          isLabor: template.isLabor ?? true,
-          // NOTE: we intentionally do NOT send isEquipment / rank
+          kind: tpl.kind,
+          description: tpl.description,
+          unit: tpl.unit,
+          quantity: tpl.defaultQuantity ?? 0,
+          unitCost: tpl.defaultUnitCost ?? 0,
+          markupPct: null,
+          contingencyPct: null,
+          durationHours: null,
+          isMaterial: tpl.isMaterial ?? true,
+          isLabor: tpl.isLabor ?? true,
+          isEquipment: tpl.isEquipment ?? false,
+          rank: nextRank,
         })
         .select("*")
         .single();
 
-      if (error) throw error;
+      if (insertErr) throw insertErr;
 
-      setItems((prev) =>
-        [...prev, data as EstimateItem].sort((a, b) =>
-          String(a.id ?? "").localeCompare(String(b.id ?? ""))
-        )
-      );
+      setItems((prev) => [...prev, data as any]);
     } catch (err: any) {
-      console.error("Add item failed:", err);
-      alert(err?.message || "Add line item failed");
-    } finally {
-      setCreating(false);
+      console.error("Add line item failed:", err);
+      setError(err?.message ?? String(err));
     }
   }
 
-  async function handleDeleteItem(id: string) {
-    if (!confirm("Delete this line item?")) return;
-    setDeletingId(id);
-    try {
-      const { error } = await supabase
-        .from("EstimateItem")
-        .delete()
-        .eq("id", id);
-      if (error) throw error;
-      setItems((prev) => prev.filter((it) => it.id !== id));
-    } catch (err: any) {
-      console.error("Delete item failed:", err);
-      alert(err?.message || "Delete failed");
-    } finally {
-      setDeletingId(null);
-    }
-  }
+  const totals = useMemo(() => {
+    const subtotal = items.reduce(
+      (sum, it) => sum + (it.quantity ?? 0) * (it.unitCost ?? 0),
+      0
+    );
 
-  // ---------- Totals using shared computeTotals helper ----------
+    const markupPct =
+      settings?.useMarkupTiers && tiers.length > 0
+        ? (() => {
+            const tier = tiers.find(
+              (t) =>
+                subtotal >= t.minAmount &&
+                (t.maxAmount == null || subtotal < t.maxAmount)
+            );
+            return (tier?.percent ?? 0) / 100;
+          })()
+        : (estimate?.markupPct ?? 0) / 100;
 
-  const totals = useMemo(
-    () =>
-      computeTotals({
-        items: items as any,
-        estimate: estimate as any,
-        settings: settings as any,
-        tax: tax as any,
-        tiers: tiers.map((t) => ({
-          minAmount: t.minAmount,
-          maxAmount: t.maxAmount,
-          percent: t.percent,
-          rank: t.rank,
-        })),
-      }),
-    [items, estimate, settings, tax, tiers]
-  );
+    const contingencyPct =
+      (estimate?.contingencyPct ?? settings?.defaultContingency ?? 0) / 100;
+
+    const afterMarkup = subtotal + subtotal * markupPct;
+    const afterContingency =
+      settings?.contingencyOrder === "BEFORE_MARKUP"
+        ? subtotal + subtotal * contingencyPct + subtotal * markupPct
+        : afterMarkup + afterMarkup * contingencyPct;
+
+    const mobilization =
+      (settings?.mobilizationPrice ?? 0) * (estimate?.mobilizationCount ?? 0);
+
+    const taxRate = (tax?.rate ?? 0) / 100;
+    const taxable =
+      tax?.taxMaterials ||
+      tax?.taxLabor ||
+      tax?.taxEquipment ||
+      tax?.taxMarkup ||
+      tax?.taxContingency
+        ? afterContingency
+        : 0;
+
+    const taxTotal = taxable * taxRate;
+    const grand = afterContingency + mobilization + taxTotal;
+
+    return {
+      subtotal,
+      markupPct: markupPct * 100,
+      contingencyPct: contingencyPct * 100,
+      afterContingency,
+      mobilization,
+      taxTotal,
+      grand,
+    };
+  }, [items, estimate, settings, tax, tiers]);
 
   return (
     <div className="mx-auto max-w-4xl p-6">
       {/* Build marker to confirm the new bundle is live */}
       <div className="text-xs text-gray-500 mb-2">
-        Build marker: <strong>PROJECT-ESTIMATE-V9-TEMPLATES</strong>
+        Build marker: <strong>PROJECT-ESTIMATE-V7-TEMPLATES</strong>
       </div>
 
       <header className="flex items-center justify-between mb-4">
@@ -391,13 +325,14 @@ export default function EstimatePage() {
 
       {loading && <div>Loading…</div>}
       {error && (
-        <div className="rounded-md border border-red-200 bg-red-50 p-3 text-sm text-red-800">
+        <div className="rounded-md border border-red-200 bg-red-50 p-3 text-sm text-red-800 mb-4">
           {error}
         </div>
       )}
 
       {!loading && !error && project && (
         <div className="space-y-8">
+          {/* Project card */}
           <section className="rounded-lg border p-4">
             <h1 className="text-2xl font-bold">{project.name}</h1>
             <p className="text-sm text-gray-600">
@@ -407,6 +342,7 @@ export default function EstimatePage() {
             <p className="text-xs text-gray-400 mt-1">Project ID: {project.id}</p>
           </section>
 
+          {/* Estimate summary card */}
           <section className="rounded-lg border p-4">
             <h2 className="text-xl font-semibold mb-2">
               {estimate ? estimate.title : "No estimate yet"}
@@ -441,38 +377,41 @@ export default function EstimatePage() {
             )}
           </section>
 
-          {/* Line Items with CRUD */}
+          {/* Line items + template selector */}
           <section className="rounded-lg border p-4">
-            <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between mb-2">
-              <h3 className="text-lg font-semibold">Line Items</h3>
-              <div className="flex flex-wrap items-center gap-2">
+            <h3 className="text-lg font-semibold mb-2">Line Items</h3>
+
+            {/* Template selector + add button */}
+            <div className="flex flex-wrap items-end gap-3 mb-3">
+              <div className="flex flex-col">
+                <label className="text-xs font-semibold text-gray-600 mb-1">
+                  Line item template
+                </label>
                 <select
-                  className="rounded border px-2 py-1 text-sm"
-                  value={selectedTemplateKey}
-                  onChange={(e) => setSelectedTemplateKey(e.target.value)}
-                  disabled={creating || !estimate}
+                  className="border rounded px-2 py-1 text-sm min-w-[260px]"
+                  value={selectedTemplateId}
+                  onChange={(e) => setSelectedTemplateId(e.target.value)}
                 >
-                  {NEW_ITEM_TEMPLATES.map((tpl) => (
-                    <option key={tpl.key} value={tpl.key}>
-                      {tpl.label}
+                  {LINE_ITEM_TEMPLATES.map((t) => (
+                    <option key={t.id} value={t.id}>
+                      {t.label}
                     </option>
                   ))}
                 </select>
-                <button
-                  className="rounded bg-blue-600 px-3 py-1 text-sm text-white disabled:opacity-60"
-                  onClick={handleAddItem}
-                  disabled={creating || !estimate}
-                >
-                  {creating ? "Adding…" : "Add line item"}
-                </button>
               </div>
+
+              <button
+                type="button"
+                className="bg-blue-600 text-white text-sm font-medium px-3 py-2 rounded hover:bg-blue-700 disabled:opacity-60"
+                onClick={handleAddLineItemFromTemplate}
+                disabled={!estimate}
+              >
+                Add line item
+              </button>
             </div>
 
             {items.length === 0 ? (
-              <div className="text-sm text-gray-600">
-                No items yet. Choose a template and click
-                &nbsp;&ldquo;Add line item&rdquo; to get started.
-              </div>
+              <div className="text-sm text-gray-600">No items yet.</div>
             ) : (
               <div className="overflow-x-auto">
                 <table className="min-w-full text-sm">
@@ -486,113 +425,28 @@ export default function EstimatePage() {
                       <th className="py-2 pr-3">Unit Cost</th>
                       <th className="py-2 pr-3">Cost</th>
                       <th className="py-2 pr-3">Flags</th>
-                      <th className="py-2 pr-3">Actions</th>
                     </tr>
                   </thead>
                   <tbody>
                     {items.map((it, idx) => {
                       const cost = (it.quantity ?? 0) * (it.unitCost ?? 0);
-                      const disabled = savingId === it.id || deletingId === it.id;
                       return (
                         <tr key={it.id} className="border-b last:border-0">
-                          <td className="py-2 pr-3">{idx + 1}</td>
+                          <td className="py-2 pr-3">{it.rank ?? idx + 1}</td>
                           <td className="py-2 pr-3">{it.kind}</td>
-                          <td className="py-2 pr-3 max-w-xs">
-                            <div className="truncate" title={it.description}>
-                              {it.description}
-                            </div>
-                          </td>
+                          <td className="py-2 pr-3">{it.description}</td>
+                          <td className="py-2 pr-3">{it.unit}</td>
+                          <td className="py-2 pr-3">{it.quantity}</td>
                           <td className="py-2 pr-3">
-                            <input
-                              className="w-16 rounded border px-1 py-0.5 text-xs"
-                              value={it.unit}
-                              onChange={(e) =>
-                                updateLocalItem(it.id, "unit", e.target.value)
-                              }
-                              disabled={disabled}
-                            />
-                          </td>
-                          <td className="py-2 pr-3">
-                            <input
-                              type="number"
-                              className="w-20 rounded border px-1 py-0.5 text-xs"
-                              value={it.quantity ?? 0}
-                              onChange={(e) =>
-                                updateLocalItem(
-                                  it.id,
-                                  "quantity",
-                                  Number(e.target.value || 0)
-                                )
-                              }
-                              disabled={disabled}
-                            />
-                          </td>
-                          <td className="py-2 pr-3">
-                            <input
-                              type="number"
-                              step="0.01"
-                              className="w-24 rounded border px-1 py-0.5 text-xs"
-                              value={it.unitCost ?? 0}
-                              onChange={(e) =>
-                                updateLocalItem(
-                                  it.id,
-                                  "unitCost",
-                                  Number(e.target.value || 0)
-                                )
-                              }
-                              disabled={disabled}
-                            />
+                            ${(it.unitCost ?? 0).toFixed(2)}
                           </td>
                           <td className="py-2 pr-3 font-medium">
                             ${cost.toFixed(2)}
                           </td>
                           <td className="py-2 pr-3">
-                            <label className="mr-2 inline-flex items-center gap-1 text-xs">
-                              <input
-                                type="checkbox"
-                                checked={!!it.isMaterial}
-                                onChange={(e) =>
-                                  updateLocalItem(
-                                    it.id,
-                                    "isMaterial",
-                                    e.target.checked
-                                  )
-                                }
-                                disabled={disabled}
-                              />
-                              M
-                            </label>
-                            <label className="inline-flex items-center gap-1 text-xs">
-                              <input
-                                type="checkbox"
-                                checked={!!it.isLabor}
-                                onChange={(e) =>
-                                  updateLocalItem(
-                                    it.id,
-                                    "isLabor",
-                                    e.target.checked
-                                  )
-                                }
-                                disabled={disabled}
-                              />
-                              L
-                            </label>
-                          </td>
-                          <td className="py-2 pr-3 space-x-1 whitespace-nowrap text-xs">
-                            <button
-                              className="rounded border px-2 py-0.5"
-                              onClick={() => handleSaveItem(it.id)}
-                              disabled={disabled}
-                            >
-                              {savingId === it.id ? "Saving…" : "Save"}
-                            </button>
-                            <button
-                              className="rounded border border-red-300 px-2 py-0.5 text-red-700"
-                              onClick={() => handleDeleteItem(it.id)}
-                              disabled={disabled}
-                            >
-                              {deletingId === it.id ? "Deleting…" : "Delete"}
-                            </button>
+                            {(it.isMaterial ? "M" : "") +
+                              (it.isLabor ? " L" : "") +
+                              (it.isEquipment ? " E" : "")}
                           </td>
                         </tr>
                       );
@@ -640,6 +494,7 @@ export default function EstimatePage() {
             </div>
           </section>
 
+          {/* Debug footer */}
           <section className="rounded-lg border p-4 text-xs text-gray-500">
             <div>
               Org Settings: {settings ? "loaded" : "—"} • Tax Scope:{" "}
