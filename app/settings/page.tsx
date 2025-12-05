@@ -1,1154 +1,514 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
-import Link from "next/link";
-import { useParams, useRouter } from "next/navigation";
-import { supabase } from "../../../lib/supabaseClient";
+import { useEffect, useState } from "react";
+import { supabase } from "../../lib/supabaseClient";
 
-// ---------- Types (lightweight, for hints only) ----------
-type Project = {
-  id: string;
-  name: string;
-  orgId: string;
-  clientName?: string | null;
-  location?: string | null;
-  description?: string | null;
-  createdat?: string | null;
-};
+// lightweight shapes (avoid generics for Vercel SWC)
+type Org = { id: string; name: string };
 
-type Estimate = {
-  id: string;
-  projectId: string;
-  title: string;
-  overheadPct?: number | null;
-  mobilizationCount?: number | null;
-  overtimeHoursPerDay?: number | null;
-  markupPct?: number | null;
-  contingencyPct?: number | null;
-  createdat?: string | null;
-};
-
-type EstimateItem = {
-  id: string;
-  estimateId: string;
-  kind: string;
-  description: string;
-  unit: string;
-  quantity: number;
-  unitCost: number;
-  markupPct?: number | null;
-  contingencyPct?: number | null;
-  durationHours?: number | null;
-  isMaterial?: boolean | null;
-  isLabor?: boolean | null;
-  isEquipment?: boolean | null;
-  rank?: number | null;
-};
-
-type OrgSettings = {
-  orgId: string;
-  useMarkupTiers: boolean;
-  defaultContingency: number;
-  contingencyOrder: "AFTER_MARKUP" | "BEFORE_MARKUP";
-  mobilizationPrice: number;
-  mobilizationAutoPerCrewDay?: boolean | null;
-  crewHoursPerDay?: number | null;
-  logoUrl?: string | null;
-  validityDays?: number | null;
-};
-
-type TaxScope = {
-  orgId: string;
-  rate: number;
-  taxMaterials: boolean;
-  taxLabor: boolean;
-  taxEquipment: boolean;
-  taxMarkup: boolean;
-  taxContingency: boolean;
-};
-
-type MarkupTier = {
-  orgId: string;
-  minAmount: number;
-  maxAmount: number | null;
-  percent: number;
-  rank: number;
-};
-
-type LineItemTemplate = {
-  id: string;
-  group: "SYSTEM" | "MATERIAL" | "LABOR";
-  label: string;
-  kind: string;
-  description: string;
-  unit: string;
-  defaultQuantity: number;
-  defaultUnitCost: number;
-  isMaterial?: boolean;
-  isLabor?: boolean;
-  isEquipment?: boolean;
-};
-
-// ---------- Template catalogue (subset for MVP) ----------
-const LINE_ITEM_TEMPLATES: LineItemTemplate[] = [
-  // Systems / turnkey
-  {
-    id: "sys-sidewalk-4-9",
-    group: "SYSTEM",
-    label: 'Sidewalk 4" @ $9/SF',
-    kind: "SIDEWALK",
-    description: 'Sidewalk 4" @ $9/SF',
-    unit: "SF",
-    defaultQuantity: 100,
-    defaultUnitCost: 9,
-    isMaterial: true,
-    isLabor: true,
-  },
-  {
-    id: "sys-sidewalk-5-10",
-    group: "SYSTEM",
-    label: 'Sidewalk 5" @ $10/SF',
-    kind: "SIDEWALK",
-    description: 'Sidewalk 5" @ $10/SF',
-    unit: "SF",
-    defaultQuantity: 100,
-    defaultUnitCost: 10,
-    isMaterial: true,
-    isLabor: true,
-  },
-  {
-    id: "sys-sidewalk-6-11",
-    group: "SYSTEM",
-    label: 'Sidewalk 6" @ $11/SF',
-    kind: "SIDEWALK",
-    description: 'Sidewalk 6" @ $11/SF',
-    unit: "SF",
-    defaultQuantity: 100,
-    defaultUnitCost: 11,
-    isMaterial: true,
-    isLabor: true,
-  },
-  {
-    id: "sys-slab-4-950",
-    group: "SYSTEM",
-    label: 'Slab 4" @ $9.50/SF',
-    kind: "SLAB",
-    description: 'Slab 4" @ $9.50/SF',
-    unit: "SF",
-    defaultQuantity: 1000,
-    defaultUnitCost: 9.5,
-    isMaterial: true,
-    isLabor: true,
-  },
-  {
-    id: "sys-slab-6-10",
-    group: "SYSTEM",
-    label: 'Slab 6" @ $10/SF',
-    kind: "SLAB",
-    description: 'Slab 6" @ $10/SF',
-    unit: "SF",
-    defaultQuantity: 1000,
-    defaultUnitCost: 10,
-    isMaterial: true,
-    isLabor: true,
-  },
-  {
-    id: "sys-slab-8-12",
-    group: "SYSTEM",
-    label: 'Slab 8" @ $12/SF',
-    kind: "SLAB",
-    description: 'Slab 8" @ $12/SF',
-    unit: "SF",
-    defaultQuantity: 1000,
-    defaultUnitCost: 12,
-    isMaterial: true,
-    isLabor: true,
-  },
-  {
-    id: "sys-curb-6-35",
-    group: "SYSTEM",
-    label: '6" Curb @ $35/LF',
-    kind: "CURB",
-    description: '6" Curb @ $35/LF',
-    unit: "LF",
-    defaultQuantity: 200,
-    defaultUnitCost: 35,
-    isMaterial: true,
-    isLabor: true,
-  },
-  {
-    id: "sys-curb-gutter-38",
-    group: "SYSTEM",
-    label: "Curb & Gutter @ $38/LF",
-    kind: "CURB",
-    description: "Curb & Gutter @ $38/LF",
-    unit: "LF",
-    defaultQuantity: 200,
-    defaultUnitCost: 38,
-    isMaterial: true,
-    isLabor: true,
-  },
-
-  // Materials
-  {
-    id: "mat-concrete-3000",
-    group: "MATERIAL",
-    label: "Concrete 3000 PSI (CY)",
-    kind: "MATERIAL",
-    description: "Concrete 3000 PSI",
-    unit: "CY",
-    defaultQuantity: 10,
-    defaultUnitCost: 150,
-    isMaterial: true,
-  },
-  {
-    id: "mat-concrete-4000",
-    group: "MATERIAL",
-    label: "Concrete 4000 PSI (CY)",
-    kind: "MATERIAL",
-    description: "Concrete 4000 PSI",
-    unit: "CY",
-    defaultQuantity: 10,
-    defaultUnitCost: 160,
-    isMaterial: true,
-  },
-  {
-    id: "mat-ca6-base",
-    group: "MATERIAL",
-    label: "CA-6 Base Stone (TON)",
-    kind: "MATERIAL",
-    description: "CA-6 Base Stone",
-    unit: "TON",
-    defaultQuantity: 10,
-    defaultUnitCost: 30,
-    isMaterial: true,
-  },
-  {
-    id: "mat-rebar-installed-ton",
-    group: "MATERIAL",
-    label: "Rebar (Installed) per Ton",
-    kind: "MATERIAL",
-    description: "Rebar (Installed) per Ton",
-    unit: "TON",
-    defaultQuantity: 1,
-    defaultUnitCost: 4000,
-    isMaterial: true,
-  },
-  {
-    id: "mat-wire-mesh",
-    group: "MATERIAL",
-    label: "Wire Mesh 6x6 W2.9/W2.9 (SF)",
-    kind: "MATERIAL",
-    description: "Wire Mesh 6x6 W2.9/W2.9",
-    unit: "SF",
-    defaultQuantity: 1000,
-    defaultUnitCost: 0.25,
-    isMaterial: true,
-  },
-  {
-    id: "mat-vapor-barrier",
-    group: "MATERIAL",
-    label: "Vapor Barrier 10 mil (SF)",
-    kind: "MATERIAL",
-    description: "Vapor Barrier 10 mil",
-    unit: "SF",
-    defaultQuantity: 1000,
-    defaultUnitCost: 0.12,
-    isMaterial: true,
-  },
-  {
-    id: "mat-curing",
-    group: "MATERIAL",
-    label: "Curing Compound (SF)",
-    kind: "MATERIAL",
-    description: "Curing Compound",
-    unit: "SF",
-    defaultQuantity: 1000,
-    defaultUnitCost: 0.12,
-    isMaterial: true,
-  },
-  {
-    id: "mat-sealer",
-    group: "MATERIAL",
-    label: "Sealer (SF)",
-    kind: "MATERIAL",
-    description: "Sealer",
-    unit: "SF",
-    defaultQuantity: 1000,
-    defaultUnitCost: 0.2,
-    isMaterial: true,
-  },
-
-  // Labor
-  {
-    id: "lab-laborer",
-    group: "LABOR",
-    label: "Laborer @ $95/hr",
-    kind: "LABOR",
-    description: "Laborer",
-    unit: "HR",
-    defaultQuantity: 8,
-    defaultUnitCost: 95,
-    isLabor: true,
-  },
-  {
-    id: "lab-finisher",
-    group: "LABOR",
-    label: "Finisher @ $95/hr",
-    kind: "LABOR",
-    description: "Finisher",
-    unit: "HR",
-    defaultQuantity: 8,
-    defaultUnitCost: 95,
-    isLabor: true,
-  },
-  {
-    id: "lab-operator",
-    group: "LABOR",
-    label: "Operator @ $95/hr",
-    kind: "LABOR",
-    description: "Operator",
-    unit: "HR",
-    defaultQuantity: 8,
-    defaultUnitCost: 95,
-    isLabor: true,
-  },
-  {
-    id: "lab-foreman",
-    group: "LABOR",
-    label: "Foreman @ $95/hr",
-    kind: "LABOR",
-    description: "Foreman",
-    unit: "HR",
-    defaultQuantity: 8,
-    defaultUnitCost: 95,
-    isLabor: true,
-  },
-];
-
-// -----------------------------------------------------
-// Component
-// -----------------------------------------------------
-export default function EstimatePage() {
-  const params = useParams<{ id: string }>();
-  const projectId = params?.id;
-  const router = useRouter();
-
+export default function Settings() {
   const [loading, setLoading] = useState(true);
-  const [savingItems, setSavingItems] = useState(false);
-  const [savingProject, setSavingProject] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [errorText, setErrorText] = useState<string | null>(null);
 
-  const [project, setProject] = useState<Project | null>(null);
-  const [projectDraft, setProjectDraft] = useState({
-    name: "",
-    clientName: "",
-    location: "",
-    description: "",
-  });
+  // auth
+  const [userId, setUserId] = useState<string | null>(null);
+  const [userEmail, setUserEmail] = useState<string | null>(null);
 
-  const [estimate, setEstimate] = useState<Estimate | null>(null);
-  const [items, setItems] = useState<EstimateItem[]>([]);
-  const [settings, setSettings] = useState<OrgSettings | null>(null);
-  const [tax, setTax] = useState<TaxScope | null>(null);
-  const [tiers, setTiers] = useState<MarkupTier[]>([]);
+  // org + settings
+  const [org, setOrg] = useState<Org | null>(null);
+  const [settings, setSettings] = useState<any | null>(null);
+  const [tax, setTax] = useState<any | null>(null);
+  const [tiers, setTiers] = useState<any[]>([]);
 
-  const [selectedTemplateId, setSelectedTemplateId] = useState<string>(
-    LINE_ITEM_TEMPLATES[0]?.id ?? ""
-  );
+  // legacy demo (direct inserts)
+  const [demoStatus, setDemoStatus] = useState<string | null>(null);
+  const [demoBusy, setDemoBusy] = useState(false);
 
-  // ---------- Load data ----------
+  // serverless demo
+  const [apiBusy, setApiBusy] = useState(false);
+  const [apiMsg, setApiMsg] = useState<string | null>(null);
+  const [apiErr, setApiErr] = useState<string | null>(null);
+
+  // ---- auth helpers ----
+  async function signInWithEmail() {
+    const email = window.prompt("Enter your email to get a magic link:");
+    if (!email) return;
+    const { error } = await supabase.auth.signInWithOtp({
+      email,
+      options: {
+        emailRedirectTo: window.location.origin, // must be on Supabase Redirect URLs
+      },
+    });
+    if (error) alert(error.message);
+    else alert("Magic link sent. Check your email and come back here after clicking it.");
+  }
+
+  async function signOutNow() {
+    await supabase.auth.signOut();
+    // reset state quickly
+    setUserId(null);
+    setUserEmail(null);
+    setOrg(null);
+    setSettings(null);
+    setTax(null);
+    setTiers([]);
+  }
+
+  // ---- boot/load flow ----
   useEffect(() => {
-    let isMounted = true;
+    let mounted = true;
 
-    async function load() {
-      setLoading(true);
-      setError(null);
-
-      try {
-        // 1) Project
-        const { data: p, error: pErr } = await supabase
-          .from("Project")
-          .select("*")
-          .eq("id", projectId)
-          .maybeSingle();
-        if (pErr) throw pErr;
-        if (!p) throw new Error("Project not found");
-        if (!isMounted) return;
-
-        const proj = p as Project;
-        setProject(proj);
-        setProjectDraft({
-          name: proj.name ?? "",
-          clientName: proj.clientName ?? "",
-          location: proj.location ?? "",
-          description: proj.description ?? "",
-        });
-
-        // 2) Latest estimate
-        const { data: est, error: estErr } = await supabase
-          .from("Estimate")
-          .select("*")
-          .eq("projectId", projectId)
-          .order("createdat", { ascending: false })
-          .maybeSingle();
-        if (estErr) throw estErr;
-        if (!isMounted) return;
-        setEstimate(est as Estimate | null);
-
-        // 3) Items via RPC
-        if (est?.id) {
-          const { data: its, error: itsErr } = await supabase.rpc(
-            "list_estimate_items",
-            { p_estimate_id: est.id }
-          );
-          if (itsErr) throw itsErr;
-          if (!isMounted) return;
-
-          const sorted = ((its as any[]) ?? [])
-            .slice()
-            .sort((a, b) => {
-              const ra = a?.rank ?? 0;
-              const rb = b?.rank ?? 0;
-              if (ra !== rb) return ra - rb;
-              return String(a?.id ?? "").localeCompare(String(b?.id ?? ""));
-            });
-
-          setItems(sorted as EstimateItem[]);
-        } else {
-          if (!isMounted) return;
-          setItems([]);
-        }
-
-        // 4) Settings / tax / tiers
-        if (proj.orgId) {
-          const [
-            { data: s, error: sErr },
-            { data: t, error: tErr },
-            { data: tr, error: trErr },
-          ] = await Promise.all([
-            supabase
-              .from("OrgSettings")
-              .select("*")
-              .eq("orgId", proj.orgId)
-              .maybeSingle(),
-            supabase
-              .from("TaxScope")
-              .select("*")
-              .eq("orgId", proj.orgId)
-              .maybeSingle(),
-            supabase.from("MarkupTier").select("*").eq("orgId", proj.orgId),
-          ]);
-          if (sErr) throw sErr;
-          if (tErr) throw tErr;
-          if (trErr) throw trErr;
-          if (!isMounted) return;
-
-          setSettings(s as OrgSettings | null);
-          setTax(t as TaxScope | null);
-
-          const sortedTiers = ((tr as any[]) ?? [])
-            .slice()
-            .sort((a, b) => (a?.rank ?? 0) - (b?.rank ?? 0));
-          setTiers(sortedTiers as MarkupTier[]);
-        } else {
-          if (!isMounted) return;
-          setSettings(null);
-          setTax(null);
-          setTiers([]);
-        }
-      } catch (err: any) {
-        console.error("Estimate page load error:", err);
-        if (isMounted) setError(err?.message ?? String(err));
-      } finally {
-        if (isMounted) setLoading(false);
+    // watch auth changes (so magic-link return updates UI)
+    const { data: sub } = supabase.auth.onAuthStateChange(async (_event, session) => {
+      if (!mounted) return;
+      const uid = session?.user?.id ?? null;
+      const email = session?.user?.email ?? null;
+      setUserId(uid);
+      setUserEmail(email);
+      if (uid) {
+        await loadOrgAndConfig(uid);
+      } else {
+        setLoading(false);
       }
-    }
+    });
 
-    if (projectId) {
-      load();
-    } else {
-      setLoading(false);
-      setError("Missing project id");
-    }
+    // initial check
+    (async () => {
+      try {
+        setLoading(true);
+        setErrorText(null);
+
+        const { data, error } = await supabase.auth.getUser();
+        if (error) throw error;
+
+        const uid = data.user?.id ?? null;
+        const email = data.user?.email ?? null;
+        setUserId(uid);
+        setUserEmail(email);
+
+        if (uid) {
+          await loadOrgAndConfig(uid);
+        } else {
+          setLoading(false);
+        }
+      } catch (e: any) {
+        console.error(e);
+        setErrorText(e?.message || "Unable to check auth status.");
+        setLoading(false);
+      }
+    })();
 
     return () => {
-      isMounted = false;
+      mounted = false;
+      sub.subscription.unsubscribe();
     };
-  }, [projectId]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
-  // ---------- Helpers ----------
-  function nextRank(): number {
-    if (!items.length) return 1;
-    const maxRank = items.reduce(
-      (max, it) => (it.rank != null && it.rank > max ? it.rank : max),
-      0
-    );
-    return (maxRank || items.length) + 1;
-  }
-
-  function handleItemChange(
-    index: number,
-    field: keyof EstimateItem,
-    value: any
-  ) {
-    setItems((prev) => {
-      const copy = [...prev];
-      const it = { ...copy[index] };
-      (it as any)[field] = value;
-      copy[index] = it;
-      return copy;
-    });
-  }
-
-  async function handleDeleteItem(item: EstimateItem) {
-    if (!item.id) return;
+  async function loadOrgAndConfig(uid: string) {
     try {
-      setSavingItems(true);
-      const { error: delErr } = await supabase
-        .from("EstimateItem")
-        .delete()
-        .eq("id", item.id);
-      if (delErr) throw delErr;
+      setLoading(true);
+      setErrorText(null);
 
-      setItems((prev) => prev.filter((it) => it.id !== item.id));
-    } catch (err: any) {
-      console.error("Delete line item failed:", err);
-      setError(err?.message ?? String(err));
+      // find an org via membership (or create)
+      let orgId: string | null = null;
+      const { data: mems, error: memErr } = await supabase
+        .from("Membership")
+        .select('"orgId"')
+        .eq('"userId"', uid);
+      if (memErr) throw memErr;
+      if (mems?.length) orgId = (mems as any[])[0].orgId;
+
+      if (!orgId) {
+        const { data: newOrg, error: orgErr } = await supabase
+          .from("Org")
+          .insert({ name: "My Concrete Company" })
+          .select("id, name")
+          .single();
+        if (orgErr) throw orgErr;
+        orgId = (newOrg as any).id as string;
+
+        const { error: memInsErr } = await supabase
+          .from("Membership")
+          .insert({ orgId, userId: uid, role: "OWNER" });
+        if (memInsErr) throw memInsErr;
+      }
+
+      const { data: orgRow, error: orgLoadErr } = await supabase
+        .from("Org")
+        .select("id, name")
+        .eq("id", orgId!)
+        .single();
+      if (orgLoadErr) throw orgLoadErr;
+      setOrg(orgRow as Org);
+
+      await ensureDefaults(orgId!);
+
+const [{ data: S }, { data: T }, { data: MK }] = await Promise.all([
+  supabase.from("OrgSettings").select("*").eq('"orgId"', orgId!).single(),
+  supabase.from("TaxScope").select("*").eq('"orgId"', orgId!).single(),
+  // ⬇️ no .order("rank") here — PostgREST rank() trap
+  supabase.from("MarkupTier").select("*").eq('"orgId"', orgId!),
+]);
+
+setSettings(S);
+setTax(T);
+
+// sort client-side by rank (nulls treated as 0)
+const sortedTiers = ((MK as any[]) ?? [])
+  .slice()
+  .sort((a, b) => (a?.rank ?? 0) - (b?.rank ?? 0));
+
+setTiers(sortedTiers);
+
+    } catch (e: any) {
+      console.error(e);
+      setErrorText(e?.message || "Failed to load organization settings.");
     } finally {
-      setSavingItems(false);
+      setLoading(false);
     }
   }
 
-  async function handleSaveItems() {
-    if (!estimate) return;
+  async function seedDemoViaApi() {
+    setApiBusy(true);
+    setApiMsg(null);
+    setApiErr(null);
     try {
-      setSavingItems(true);
-      setError(null);
-
-      const payload = items.map((it, idx) => ({
-        id: it.id,
-        estimateId: estimate.id,
-        kind: it.kind,
-        description: it.description,
-        unit: it.unit,
-        quantity: it.quantity ?? 0,
-        unitCost: it.unitCost ?? 0,
-        isMaterial: it.isMaterial ?? false,
-        isLabor: it.isLabor ?? false,
-        isEquipment: it.isEquipment ?? false,
-        rank: it.rank ?? idx + 1,
-      }));
-
-      const { error: upErr } = await supabase
-        .from("EstimateItem")
-        .upsert(payload, { onConflict: "id" });
-      if (upErr) throw upErr;
-    } catch (err: any) {
-      console.error("Save line items failed:", err);
-      setError(err?.message ?? String(err));
+      if (!userId) throw new Error("Please sign in first.");
+      const res = await fetch("/api/seed-demo", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ userId }),
+      });
+      const json = await res.json();
+      if (!res.ok || !json?.ok) throw new Error(json?.error ?? "Failed to seed demo data");
+      setApiMsg(
+        `Demo ready — org:${json.summary.org}, project:${json.summary.project}, estimate:${json.summary.estimate}, items:${json.summary.items}`
+      );
+    } catch (e: any) {
+      setApiErr(e?.message ?? "Unknown error while seeding");
     } finally {
-      setSavingItems(false);
+      setApiBusy(false);
     }
   }
 
-  function handleAddFromTemplate() {
-    if (!estimate) {
-      setError("Create an estimate before adding line items.");
-      return;
-    }
-    const tpl = LINE_ITEM_TEMPLATES.find((t) => t.id === selectedTemplateId);
-    if (!tpl) return;
-
-    const newItem: EstimateItem = {
-      id: crypto.randomUUID(),
-      estimateId: estimate.id,
-      kind: tpl.kind,
-      description: tpl.description,
-      unit: tpl.unit,
-      quantity: tpl.defaultQuantity,
-      unitCost: tpl.defaultUnitCost,
-      isMaterial: tpl.isMaterial ?? null,
-      isLabor: tpl.isLabor ?? null,
-      isEquipment: tpl.isEquipment ?? null,
-      rank: nextRank(),
-      markupPct: null,
-      contingencyPct: null,
-      durationHours: null,
-    };
-
-    setItems((prev) => [...prev, newItem]);
-  }
-
-  function handleAddBlankItem() {
-    if (!estimate) {
-      setError("Create an estimate before adding line items.");
-      return;
-    }
-    const newItem: EstimateItem = {
-      id: crypto.randomUUID(),
-      estimateId: estimate.id,
-      kind: "CUSTOM",
-      description: "",
-      unit: "EA",
-      quantity: 1,
-      unitCost: 0,
-      isMaterial: null,
-      isLabor: null,
-      isEquipment: null,
-      rank: nextRank(),
-      markupPct: null,
-      contingencyPct: null,
-      durationHours: null,
-    };
-    setItems((prev) => [...prev, newItem]);
-  }
-
-  async function handleSaveProjectHeader() {
-    if (!project) return;
+  // ---- legacy direct insert helper (brought back so build succeeds) ----
+  const initDemoProject = async (orgId: string) => {
+    setDemoStatus(null);
+    setDemoBusy(true);
     try {
-      setSavingProject(true);
-      setError(null);
+      const { data: me, error: meErr } = await supabase.auth.getUser();
+      if (meErr) throw meErr;
+      const uid = me.user?.id;
+      if (!uid) throw new Error("No signed-in user.");
 
-      const { data, error: upErr } = await supabase
+      setDemoStatus("Creating project…");
+      const { data: project, error: pErr } = await supabase
         .from("Project")
-        .update({
-          name: projectDraft.name,
-          clientName: projectDraft.clientName || null,
-          location: projectDraft.location || null,
-          description: projectDraft.description || null,
+        .insert({
+          orgId,
+          name: "Warehouse Expansion",
+          clientName: "BigCo",
+          location: "Joliet, IL",
+          createdBy: uid,
         })
-        .eq("id", project.id)
         .select("*")
-        .maybeSingle();
+        .single();
+      if (pErr) throw pErr;
 
-      if (upErr) throw upErr;
-      if (data) {
-        setProject(data as Project);
-      }
-    } catch (err: any) {
-      console.error("Save project header failed:", err);
-      setError(err?.message ?? String(err));
-    } finally {
-      setSavingProject(false);
-    }
-  }
-
-  async function handleDeleteProject() {
-    if (!project) return;
-
-    const confirmed =
-      typeof window !== "undefined"
-        ? window.confirm(
-            "Delete this project and all its estimates/items? This cannot be undone."
-          )
-        : false;
-    if (!confirmed) return;
-
-    try {
-      setSavingProject(true);
-      setError(null);
-
-      // Fetch all estimates for this project
-      const { data: ests, error: estErr } = await supabase
+      setDemoStatus("Creating estimate…");
+      const { data: estimate, error: eErr } = await supabase
         .from("Estimate")
-        .select("id")
-        .eq("projectId", project.id);
+        .insert({
+          projectId: (project as any).id,
+          title: "Base Bid",
+          overheadPct: 10,
+          createdBy: uid,
+          mobilizationCount: 1,
+        })
+        .select("*")
+        .single();
+      if (eErr) throw eErr;
 
-      if (estErr) throw estErr;
+      setDemoStatus("Adding sample items…");
+      const { error: iErr } = await supabase.from("EstimateItem").insert([
+        {
+          estimateId: (estimate as any).id,
+          kind: "SLAB",
+          description: '6" slab on grade',
+          unit: "SF",
+          quantity: 20000,
+          unitCost: 5.25,
+          markupPct: 20,
+          contingencyPct: 5,
+          durationHours: 160,
+          isMaterial: true,
+          isLabor: true,
+          isEquipment: true,
+          rank: 1,
+        },
+        {
+          estimateId: (estimate as any).id,
+          kind: "FOOTING",
+          description: 'Strip footing 24"x12"',
+          unit: "LF",
+          quantity: 600,
+          unitCost: 18.5,
+          markupPct: 15,
+          contingencyPct: 5,
+          durationHours: 80,
+          isMaterial: true,
+          isLabor: true,
+          rank: 2,
+        },
+        {
+          estimateId: (estimate as any).id,
+          kind: "WALL",
+          description: '8" formed wall',
+          unit: "SF",
+          quantity: 3000,
+          unitCost: 15.0,
+          markupPct: 12,
+          contingencyPct: 5,
+          durationHours: 120,
+          isMaterial: true,
+          isLabor: true,
+          rank: 3,
+        },
+      ]);
+      if (iErr) throw iErr;
 
-      const estIds = (ests ?? []).map((e) => e.id);
-
-      if (estIds.length) {
-        // Delete items for those estimates
-        const { error: itErr } = await supabase
-          .from("EstimateItem")
-          .delete()
-          .in("estimateId", estIds);
-        if (itErr) throw itErr;
-
-        // Delete the estimates themselves
-        const { error: delEstErr } = await supabase
-          .from("Estimate")
-          .delete()
-          .in("id", estIds);
-        if (delEstErr) throw delEstErr;
-      }
-
-      // Delete the project
-      const { error: projErr } = await supabase
-        .from("Project")
-        .delete()
-        .eq("id", project.id);
-      if (projErr) throw projErr;
-
-      // Navigate home
-      router.push("/");
+      setDemoStatus("✅ Demo project created! Go to Home to see it.");
     } catch (err: any) {
-      console.error("Delete project failed:", err);
-      setError(err?.message ?? String(err));
+      console.error("Init demo data failed:", err);
+      setDemoStatus(`❌ Initialize Demo Data failed: ${err?.message || String(err)}`);
     } finally {
-      setSavingProject(false);
+      setDemoBusy(false);
+    }
+  };
+
+  async function save() {
+    try {
+      if (!org || !settings || !tax) return;
+      await supabase.from("OrgSettings").upsert(settings, { onConflict: "orgId" });
+      await supabase.from("TaxScope").upsert({ orgId: org.id, ...tax }, { onConflict: "orgId" });
+      await supabase.from("MarkupTier").delete().eq('"orgId"', org.id);
+      const toInsert = tiers.map((t: any) => ({ ...t, id: undefined, orgId: org.id }));
+      if (toInsert.length) await supabase.from("MarkupTier").insert(toInsert);
+      alert("Saved!");
+    } catch (e: any) {
+      alert(e?.message || "Save failed");
     }
   }
 
-  // ---------- Totals ----------
-  const totals = useMemo(() => {
-    const subtotal = items.reduce(
-      (sum, it) => sum + (it.quantity ?? 0) * (it.unitCost ?? 0),
-      0
-    );
-
-    const markupPct =
-      settings?.useMarkupTiers && tiers.length > 0
-        ? (() => {
-            const tier = tiers.find(
-              (t) =>
-                subtotal >= t.minAmount &&
-                (t.maxAmount == null || subtotal < t.maxAmount)
-            );
-            return (tier?.percent ?? 0) / 100;
-          })()
-        : (estimate?.markupPct ?? 0) / 100;
-
-    const contingencyPct =
-      (estimate?.contingencyPct ?? settings?.defaultContingency ?? 0) / 100;
-
-    const afterMarkup = subtotal + subtotal * markupPct;
-    const afterContingency =
-      settings?.contingencyOrder === "BEFORE_MARKUP"
-        ? subtotal + subtotal * contingencyPct + subtotal * markupPct
-        : afterMarkup + afterMarkup * contingencyPct;
-
-    const mobilization =
-      (settings?.mobilizationPrice ?? 0) * (estimate?.mobilizationCount ?? 0);
-
-    const taxRate = (tax?.rate ?? 0) / 100;
-    const taxable =
-      tax?.taxMaterials ||
-      tax?.taxLabor ||
-      tax?.taxEquipment ||
-      tax?.taxMarkup ||
-      tax?.taxContingency
-        ? afterContingency
-        : 0;
-
-    const taxTotal = taxable * taxRate;
-    const grand = afterContingency + mobilization + taxTotal;
-
-    return {
-      subtotal,
-      markupPct: markupPct * 100,
-      contingencyPct: contingencyPct * 100,
-      afterContingency,
-      mobilization,
-      taxTotal,
-      grand,
-    };
-  }, [items, estimate, settings, tax, tiers]);
-
-  // ---------- Render ----------
+  // ---------- render ----------
   return (
-    <div className="mx-auto max-w-5xl p-6">
-      {/* Build marker so we know this bundle is live */}
-      <div className="text-xs text-gray-500 mb-2">
-        Build marker: <strong>PROJECT-ESTIMATE-V10-DELETE</strong>
-      </div>
+    <div className="container">
+      <nav style={{ marginBottom: 16 }}>
+        <a href="/" style={{ marginRight: 16 }}>Home</a>
+        <a href="/settings">Settings</a>
+      </nav>
 
-      <header className="flex items-center justify-between mb-4">
-        <nav className="text-sm space-x-4">
-          <Link href="/" className="text-blue-600 hover:underline">
-            ← Home
-          </Link>
-          <Link href="/settings" className="text-blue-600 hover:underline">
-            Settings
-          </Link>
-        </nav>
-        <div className="text-lg font-semibold">Concrete Estimator</div>
+      <header style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+        <h1 className="title">Settings</h1>
+        <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+          <span className="text-sm">
+            {userId ? `Signed in${userEmail ? `: ${userEmail}` : ""}` : "Not signed in"}
+          </span>
+          {!userId ? (
+            <button className="button secondary" onClick={signInWithEmail}>Sign in</button>
+          ) : (
+            <button className="button secondary" onClick={signOutNow}>Sign out</button>
+          )}
+        </div>
       </header>
 
-      {loading && <div>Loading…</div>}
-
-      {error && (
-        <div className="mb-4 rounded-md border border-red-200 bg-red-50 p-3 text-sm text-red-800">
-          {error}
+      {errorText && (
+        <div className="card" style={{ color: "crimson", marginBottom: 16 }}>
+          {errorText}
         </div>
       )}
 
-      {!loading && !error && project && (
-        <div className="space-y-8">
-          {/* Project header / editable fields */}
-          <section className="rounded-lg border p-4 space-y-4">
-            <h1 className="text-xl font-bold mb-1">Project</h1>
+      {loading && <div className="card">Loading…</div>}
 
-            <div className="space-y-4 max-w-xl">
-              <div className="flex flex-col gap-1">
-                <label className="text-sm font-medium">Project name</label>
-                <input
-                  className="border rounded px-2 py-1 text-sm"
-                  value={projectDraft.name}
-                  onChange={(e) =>
-                    setProjectDraft((d) => ({ ...d, name: e.target.value }))
-                  }
-                />
-              </div>
+      {!loading && !userId && (
+        <div className="card">
+          <p>Sign in with a magic link to manage your org and seed demo data.</p>
+          <button className="button" onClick={signInWithEmail}>Send magic link</button>
+        </div>
+      )}
 
-              <div className="flex flex-col gap-1">
-                <label className="text-sm font-medium">Client name</label>
-                <input
-                  className="border rounded px-2 py-1 text-sm"
-                  value={projectDraft.clientName}
-                  onChange={(e) =>
-                    setProjectDraft((d) => ({
-                      ...d,
-                      clientName: e.target.value,
-                    }))
-                  }
-                />
-              </div>
+      {!loading && userId && (
+        <>
+          {/* Serverless seeder */}
+          <div className="card" style={{ marginBottom: 16 }}>
+            <p>
+              <strong>Seed via API:</strong> Creates/reuses Demo Org, Warehouse Expansion project,
+              one estimate, and sample items (idempotent).
+            </p>
+            <button className="button" disabled={apiBusy} onClick={seedDemoViaApi}>
+              {apiBusy ? "Seeding…" : "Seed Demo (serverless)"}
+            </button>
+            {apiMsg && <p style={{ marginTop: 8, color: "green" }}>{apiMsg}</p>}
+            {apiErr && <p style={{ marginTop: 8, color: "crimson" }}>{apiErr}</p>}
+          </div>
 
-              <div className="flex flex-col gap-1">
-                <label className="text-sm font-medium">Location</label>
-                <input
-                  className="border rounded px-2 py-1 text-sm"
-                  value={projectDraft.location}
-                  onChange={(e) =>
-                    setProjectDraft((d) => ({
-                      ...d,
-                      location: e.target.value,
-                    }))
-                  }
-                />
-              </div>
+          {/* Legacy direct insert (optional) */}
+          <div className="card" style={{ marginBottom: 16 }}>
+            <p><strong>Legacy step:</strong> Directly create a demo project (may create duplicates).</p>
+            <button className="button" disabled={demoBusy || !org} onClick={() => org && initDemoProject(org.id)}>
+              {demoBusy ? "Working…" : "Initialize Demo Data (direct)"}
+            </button>
+            {demoStatus && <p style={{ marginTop: 8 }}>{demoStatus}</p>}
+          </div>
 
-              <div className="flex flex-col gap-1">
-                <label className="text-sm font-medium">
-                  Project description
-                </label>
-                <textarea
-                  className="border rounded px-2 py-1 text-sm min-h-[80px]"
-                  placeholder="Scope notes, phasing, constraints, etc."
-                  value={projectDraft.description}
-                  onChange={(e) =>
-                    setProjectDraft((d) => ({
-                      ...d,
-                      description: e.target.value,
-                    }))
-                  }
-                />
-              </div>
-
-              <div className="text-xs text-gray-500 mt-2">
-                Project ID: <span className="font-mono">{project.id}</span>
-              </div>
-
-              <div className="flex items-center gap-3 pt-1">
-                <button
-                  type="button"
-                  onClick={handleSaveProjectHeader}
-                  disabled={savingProject}
-                  className="inline-flex items-center rounded bg-blue-600 px-3 py-1 text-sm font-medium text-white disabled:opacity-60"
-                >
-                  {savingProject ? "Saving…" : "Save project"}
-                </button>
-                <button
-                  type="button"
-                  onClick={handleDeleteProject}
-                  disabled={savingProject}
-                  className="inline-flex items-center rounded border border-red-500 px-3 py-1 text-sm font-medium text-red-600 hover:bg-red-50 disabled:opacity-60"
-                >
-                  Delete project
-                </button>
-              </div>
-            </div>
-          </section>
-
-          {/* Estimate summary */}
-          <section className="rounded-lg border p-4">
-            <h2 className="text-lg font-semibold mb-2">
-              {estimate ? estimate.title : "Base Bid"}
-            </h2>
-            {estimate ? (
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm">
-                <div>
-                  <div className="text-gray-500">Overhead %</div>
-                  <div>{estimate.overheadPct ?? 0}%</div>
+          {/* Only show the rest if org + settings loaded */}
+          {!org || !settings || !tax ? (
+            <div className="card">Loading organization config…</div>
+          ) : (
+            <>
+              <div className="card" style={{ marginBottom: 16 }}>
+                <h2 className="text-lg">Branding</h2>
+                <div className="field">
+                  <label>Logo URL</label>
+                  <input value={settings.logoUrl ?? ""} onChange={(e) => setSettings({ ...settings, logoUrl: e.target.value })} placeholder="/logo.svg" />
                 </div>
-                <div>
-                  <div className="text-gray-500">Mobilization Count</div>
-                  <div>{estimate.mobilizationCount ?? 0}</div>
+                <div className="field">
+                  <label>License / Bonding</label>
+                  <textarea value={settings.licenseText ?? ""} onChange={(e) => setSettings({ ...settings, licenseText: e.target.value })} />
                 </div>
-                <div>
-                  <div className="text-gray-500">Overtime Hours / Day</div>
-                  <div>{estimate.overtimeHoursPerDay ?? 0}</div>
+                <div className="field">
+                  <label>Terms</label>
+                  <textarea value={settings.termsText ?? ""} onChange={(e) => setSettings({ ...settings, termsText: e.target.value })} />
                 </div>
-                <div>
-                  <div className="text-gray-500">Created</div>
-                  <div>
-                    {estimate.createdat
-                      ? new Date(estimate.createdat).toLocaleString()
-                      : "—"}
-                  </div>
+                <div className="field">
+                  <label>Exclusions</label>
+                  <textarea value={settings.exclusionsText ?? ""} onChange={(e) => setSettings({ ...settings, exclusionsText: e.target.value })} />
+                </div>
+                <div className="field">
+                  <label>Quote Validity (days)</label>
+                  <input type="number" value={settings.validityDays ?? 30} onChange={(e) => setSettings({ ...settings, validityDays: parseInt(e.target.value || "30", 10) })} />
                 </div>
               </div>
-            ) : (
-              <p className="text-sm text-gray-600">
-                Create an estimate to get started.
-              </p>
-            )}
-          </section>
 
-          {/* Line items with template picker */}
-          <section className="rounded-lg border p-4 space-y-3">
-            <div className="flex flex-col sm:flex-row sm:items-end sm:justify-between gap-3">
-              <h3 className="text-lg font-semibold">Line Items</h3>
-
-              <div className="flex flex-col sm:flex-row gap-2 sm:items-center">
-                <select
-                  className="border rounded px-2 py-1 text-sm min-w-[220px]"
-                  value={selectedTemplateId}
-                  onChange={(e) => setSelectedTemplateId(e.target.value)}
-                >
-                  {["SYSTEM", "MATERIAL", "LABOR"].map((group) => (
-                    <optgroup key={group} label={group}>
-                      {LINE_ITEM_TEMPLATES.filter(
-                        (t) => t.group === group
-                      ).map((tpl) => (
-                        <option key={tpl.id} value={tpl.id}>
-                          {tpl.label}
-                        </option>
-                      ))}
-                    </optgroup>
-                  ))}
-                </select>
-                <button
-                  type="button"
-                  onClick={handleAddFromTemplate}
-                  className="rounded bg-green-600 px-3 py-1 text-sm font-medium text-white disabled:opacity-60"
-                  disabled={!estimate}
-                >
-                  Add from template
-                </button>
-                <button
-                  type="button"
-                  onClick={handleAddBlankItem}
-                  className="rounded border px-3 py-1 text-sm"
-                  disabled={!estimate}
-                >
-                  Add blank line
-                </button>
+              <div className="card" style={{ marginBottom: 16 }}>
+                <h2 className="text-lg">Cost behavior</h2>
+                <div className="field">
+                  <label>Use markup tiers</label>
+                  <select value={settings.useMarkupTiers ? "true" : "false"} onChange={(e) => setSettings({ ...settings, useMarkupTiers: e.target.value === "true" })}>
+                    <option value="true">Yes</option>
+                    <option value="false">No</option>
+                  </select>
+                </div>
+                <div className="field">
+                  <label>Contingency (%)</label>
+                  <input type="number" value={settings.defaultContingency ?? 5} onChange={(e) => setSettings({ ...settings, defaultContingency: parseFloat(e.target.value || "0") })} />
+                </div>
+                <div className="field">
+                  <label>Contingency order</label>
+                  <select value={settings.contingencyOrder} onChange={(e) => setSettings({ ...settings, contingencyOrder: e.target.value })}>
+                    <option value="AFTER_MARKUP">After markup</option>
+                    <option value="BEFORE_MARKUP">Before markup</option>
+                  </select>
+                </div>
+                <div className="field">
+                  <label>Mobilization price ($)</label>
+                  <input type="number" value={settings.mobilizationPrice ?? 3850} onChange={(e) => setSettings({ ...settings, mobilizationPrice: parseFloat(e.target.value || "0") })} />
+                </div>
+                <div className="field">
+                  <label>Crew hours per day</label>
+                  <input type="number" value={settings.crewHoursPerDay ?? 8} onChange={(e) => setSettings({ ...settings, crewHoursPerDay: parseInt(e.target.value || "8", 10) })} />
+                </div>
               </div>
-            </div>
 
-            {items.length === 0 ? (
-              <div className="text-sm text-gray-600">No items yet.</div>
-            ) : (
-              <div className="overflow-x-auto">
-                <table className="min-w-full text-sm">
-                  <thead>
-                    <tr className="text-left border-b">
-                      <th className="py-2 pr-3">#</th>
-                      <th className="py-2 pr-3">Kind</th>
-                      <th className="py-2 pr-3">Description</th>
-                      <th className="py-2 pr-3">Unit</th>
-                      <th className="py-2 pr-3">Qty</th>
-                      <th className="py-2 pr-3">Unit Cost</th>
-                      <th className="py-2 pr-3">Cost</th>
-                      <th className="py-2 pr-3">Flags</th>
-                      <th className="py-2 pr-3 text-right">Actions</th>
-                    </tr>
-                  </thead>
+              <div className="card">
+                <h2 className="text-lg">Tax</h2>
+                <div className="field"><label>Tax rate (%)</label><input type="number" value={tax.rate ?? 0} onChange={(e) => setTax({ ...tax, rate: parseFloat(e.target.value || "0") })} /></div>
+                <div className="field"><label><input type="checkbox" checked={!!tax.taxMaterials} onChange={(e) => setTax({ ...tax, taxMaterials: e.target.checked })} /> Materials</label></div>
+                <div className="field"><label><input type="checkbox" checked={!!tax.taxLabor} onChange={(e) => setTax({ ...tax, taxLabor: e.target.checked })} /> Labor</label></div>
+                <div className="field"><label><input type="checkbox" checked={!!tax.taxEquipment} onChange={(e) => setTax({ ...tax, taxEquipment: e.target.checked })} /> Equipment</label></div>
+                <div className="field"><label><input type="checkbox" checked={!!tax.taxMarkup} onChange={(e) => setTax({ ...tax, taxMarkup: e.target.checked })} /> Markup</label></div>
+                <div className="field"><label><input type="checkbox" checked={!!tax.taxContingency} onChange={(e) => setTax({ ...tax, taxContingency: e.target.checked })} /> Contingency</label></div>
+              </div>
+
+              <div className="card">
+                <h2 className="text-lg">Markup tiers</h2>
+                <table className="table">
+                  <thead><tr><th>Rank</th><th>Min ($)</th><th>Max ($)</th><th>Percent (%)</th><th></th></tr></thead>
                   <tbody>
-                    {items.map((it, idx) => {
-                      const cost = (it.quantity ?? 0) * (it.unitCost ?? 0);
-                      return (
-                        <tr key={it.id} className="border-b last:border-0">
-                          <td className="py-2 pr-3">{it.rank ?? idx + 1}</td>
-                          <td className="py-2 pr-3">
-                            <input
-                              className="border rounded px-1 py-0.5 w-24"
-                              value={it.kind}
-                              onChange={(e) =>
-                                handleItemChange(idx, "kind", e.target.value)
-                              }
-                            />
-                          </td>
-                          <td className="py-2 pr-3">
-                            <input
-                              className="border rounded px-1 py-0.5 w-full"
-                              value={it.description}
-                              onChange={(e) =>
-                                handleItemChange(
-                                  idx,
-                                  "description",
-                                  e.target.value
-                                )
-                              }
-                            />
-                          </td>
-                          <td className="py-2 pr-3">
-                            <input
-                              className="border rounded px-1 py-0.5 w-16"
-                              value={it.unit}
-                              onChange={(e) =>
-                                handleItemChange(idx, "unit", e.target.value)
-                              }
-                            />
-                          </td>
-                          <td className="py-2 pr-3">
-                            <input
-                              type="number"
-                              className="border rounded px-1 py-0.5 w-20 text-right"
-                              value={it.quantity}
-                              onChange={(e) =>
-                                handleItemChange(
-                                  idx,
-                                  "quantity",
-                                  Number(e.target.value || 0)
-                                )
-                              }
-                            />
-                          </td>
-                          <td className="py-2 pr-3">
-                            <input
-                              type="number"
-                              step="0.01"
-                              className="border rounded px-1 py-0.5 w-24 text-right"
-                              value={it.unitCost}
-                              onChange={(e) =>
-                                handleItemChange(
-                                  idx,
-                                  "unitCost",
-                                  Number(e.target.value || 0)
-                                )
-                              }
-                            />
-                          </td>
-                          <td className="py-2 pr-3 font-medium">
-                            ${cost.toFixed(2)}
-                          </td>
-                          <td className="py-2 pr-3">
-                            <label className="mr-2 text-xs">
-                              <input
-                                type="checkbox"
-                                className="mr-1 align-middle"
-                                checked={!!it.isMaterial}
-                                onChange={(e) =>
-                                  handleItemChange(
-                                    idx,
-                                    "isMaterial",
-                                    e.target.checked
-                                  )
-                                }
-                              />
-                              Mat
-                            </label>
-                            <label className="mr-2 text-xs">
-                              <input
-                                type="checkbox"
-                                className="mr-1 align-middle"
-                                checked={!!it.isLabor}
-                                onChange={(e) =>
-                                  handleItemChange(
-                                    idx,
-                                    "isLabor",
-                                    e.target.checked
-                                  )
-                                }
-                              />
-                              Labor
-                            </label>
-                            <label className="text-xs">
-                              <input
-                                type="checkbox"
-                                className="mr-1 align-middle"
-                                checked={!!it.isEquipment}
-                                onChange={(e) =>
-                                  handleItemChange(
-                                    idx,
-                                    "isEquipment",
-                                    e.target.checked
-                                  )
-                                }
-                              />
-                              Equip
-                            </label>
-                          </td>
-                          <td className="py-2 pr-3 text-right">
-                            <button
-                              type="button"
-                              onClick={() => handleDeleteItem(it)}
-                              className="text-xs text-red-600 hover:underline"
-                            >
-                              Delete
-                            </button>
-                          </td>
-                        </tr>
-                      );
-                    })}
+                    {tiers.map((t, i) => (
+                      <tr key={i}>
+                        <td><input type="number" value={t.rank} onChange={(e) => updateTier(i, { ...t, rank: parseInt(e.target.value || "0", 10) })} /></td>
+                        <td><input type="number" value={t.minAmount} onChange={(e) => updateTier(i, { ...t, minAmount: parseFloat(e.target.value || "0") })} /></td>
+                        <td><input type="number" value={t.maxAmount ?? ""} onChange={(e) => updateTier(i, { ...t, maxAmount: e.target.value === "" ? null : parseFloat(e.target.value) })} /></td>
+                        <td><input type="number" value={t.percent} onChange={(e) => updateTier(i, { ...t, percent: parseFloat(e.target.value || "0") })} /></td>
+                        <td><button className="button secondary" onClick={() => removeTier(i)}>Remove</button></td>
+                      </tr>
+                    ))}
                   </tbody>
                 </table>
-              </div>
-            )}
-
-            <div className="pt-3 border-t flex justify-end">
-              <button
-                type="button"
-                onClick={handleSaveItems}
-                disabled={savingItems}
-                className="rounded bg-blue-600 px-3 py-1 text-sm font-medium text-white disabled:opacity-60"
-              >
-                {savingItems ? "Saving…" : "Save line items"}
-              </button>
-            </div>
-          </section>
-
-          {/* Totals */}
-          <section className="rounded-lg border p-4">
-            <h3 className="text-lg font-semibold mb-2">Totals (quick view)</h3>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm">
-              <div>
-                <div className="text-gray-500">Subtotal</div>
-                <div>${totals.subtotal.toFixed(2)}</div>
-              </div>
-              <div>
-                <div className="text-gray-500">Markup %</div>
-                <div>{totals.markupPct.toFixed(2)}%</div>
-              </div>
-              <div>
-                <div className="text-gray-500">Contingency %</div>
-                <div>{totals.contingencyPct.toFixed(2)}%</div>
-              </div>
-              <div>
-                <div className="text-gray-500">After Contingency</div>
-                <div>${totals.afterContingency.toFixed(2)}</div>
-              </div>
-              <div>
-                <div className="text-gray-500">Mobilization</div>
-                <div>${totals.mobilization.toFixed(2)}</div>
-              </div>
-              <div>
-                <div className="text-gray-500">Tax</div>
-                <div>${totals.taxTotal.toFixed(2)}</div>
-              </div>
-              <div className="sm:col-span-2 pt-1 border-t">
-                <div className="text-gray-500">Grand Total</div>
-                <div className="text-base font-semibold">
-                  ${totals.grand.toFixed(2)}
+                <div style={{ marginTop: 8 }}>
+                  <button className="button secondary" onClick={() => addTier()}>Add tier</button>{" "}
+                  <button className="button" onClick={save}>Save all</button>
                 </div>
               </div>
-            </div>
-          </section>
-
-          {/* Debug footer */}
-          <section className="rounded-lg border p-4 text-xs text-gray-500">
-            <div>
-              Org Settings: {settings ? "loaded" : "—"} • Tax Scope:{" "}
-              {tax ? "loaded" : "—"} • Tiers: {tiers.length}
-            </div>
-          </section>
-        </div>
+            </>
+          )}
+        </>
       )}
     </div>
   );
+
+  // ------- local helpers for tiers -------
+  function addTier() {
+    setTiers([
+      ...tiers,
+      { rank: (tiers.at(-1)?.rank ?? 0) + 1, minAmount: 0, maxAmount: null, percent: 10 },
+    ]);
+  }
+  function removeTier(i: number) {
+    setTiers(tiers.filter((_, idx) => idx !== i));
+  }
+  function updateTier(i: number, t: any) {
+    const next = [...tiers];
+    next[i] = t;
+    setTiers(next);
+  }
+}
+
+// --------- defaults seeding ----------
+async function ensureDefaults(orgId: string) {
+  await supabase.from("OrgSettings").upsert(
+    {
+      orgId,
+      useMarkupTiers: true,
+      defaultContingency: 5,
+      contingencyOrder: "AFTER_MARKUP",
+      mobilizationPrice: 3850,
+      crewHoursPerDay: 8,
+      logoUrl: "/logo.svg",
+      validityDays: 30,
+    },
+    { onConflict: "orgId" }
+  );
+
+  await supabase.from("TaxScope").upsert(
+    {
+      orgId,
+      rate: 0,
+      taxMaterials: false,
+      taxLabor: false,
+      taxEquipment: false,
+      taxMarkup: false,
+      taxContingency: false,
+    },
+    { onConflict: "orgId" }
+  );
+
+  await supabase.from("MarkupTier").delete().eq('"orgId"', orgId);
+  await supabase.from("MarkupTier").insert([
+    { orgId, minAmount: 0, maxAmount: 10000, percent: 20, rank: 1 },
+    { orgId, minAmount: 10000, maxAmount: 50000, percent: 15, rank: 2 },
+    { orgId, minAmount: 50000, maxAmount: null, percent: 10, rank: 3 },
+  ]);
 }
