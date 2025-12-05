@@ -6,23 +6,6 @@ import { supabase } from "../../lib/supabaseClient";
 // lightweight shapes
 type Org = { id: string; name: string };
 
-// Small helper so auth.getUser() can’t hang forever
-async function withTimeout<T>(p: Promise<T>, ms = 15000): Promise<T> {
-  return new Promise((resolve, reject) => {
-    const id = setTimeout(() => reject(new Error("Request timed out")), ms);
-    p.then(
-      (val) => {
-        clearTimeout(id);
-        resolve(val);
-      },
-      (err) => {
-        clearTimeout(id);
-        reject(err);
-      }
-    );
-  });
-}
-
 export default function Settings() {
   const [loading, setLoading] = useState(true);
   const [errorText, setErrorText] = useState<string | null>(null);
@@ -74,32 +57,20 @@ export default function Settings() {
   useEffect(() => {
     let mounted = true;
 
-    // watch auth changes (magic-link return, sign-out, etc.)
-    const { data: sub } = supabase.auth.onAuthStateChange(async (_event, session) => {
-      if (!mounted) return;
-      const uid = session?.user?.id ?? null;
-      const email = session?.user?.email ?? null;
-      setUserId(uid);
-      setUserEmail(email);
-      if (uid) {
-        await loadOrgAndConfig(uid);
-      } else {
-        setLoading(false);
-      }
-    });
-
-    // initial check
-    (async () => {
+    async function bootFromSession() {
       try {
         setLoading(true);
         setErrorText(null);
 
-        // timeout only here
-        const { data, error } = await withTimeout(supabase.auth.getUser());
+        // Use getSession instead of getUser (lighter, no custom timeout)
+        const { data, error } = await supabase.auth.getSession();
+        if (!mounted) return;
         if (error) throw error;
 
-        const uid = data.user?.id ?? null;
-        const email = data.user?.email ?? null;
+        const session = data.session;
+        const uid = session?.user?.id ?? null;
+        const email = session?.user?.email ?? null;
+
         setUserId(uid);
         setUserEmail(email);
 
@@ -109,11 +80,30 @@ export default function Settings() {
           setLoading(false);
         }
       } catch (e: any) {
+        if (!mounted) return;
         console.error(e);
         setErrorText(e?.message || "Unable to check auth status.");
         setLoading(false);
       }
-    })();
+    }
+
+    // Subscribe to future auth changes (magic link, sign out, etc.)
+    const { data: sub } = supabase.auth.onAuthStateChange(
+      async (_event, session) => {
+        if (!mounted) return;
+        const uid = session?.user?.id ?? null;
+        const email = session?.user?.email ?? null;
+        setUserId(uid);
+        setUserEmail(email);
+        if (uid) {
+          await loadOrgAndConfig(uid);
+        } else {
+          setLoading(false);
+        }
+      }
+    );
+
+    bootFromSession();
 
     return () => {
       mounted = false;
@@ -161,7 +151,7 @@ export default function Settings() {
       // Ensure defaults exist
       await ensureDefaults(orgId!);
 
-      // Load config (no timeout wrapper here)
+      // Load config (no custom timeout here)
       const [
         { data: S, error: sErr },
         { data: T, error: tErr },
@@ -219,9 +209,9 @@ export default function Settings() {
     setDemoStatus(null);
     setDemoBusy(true);
     try {
-      const { data: me, error: meErr } = await supabase.auth.getUser();
+      const { data: me, error: meErr } = await supabase.auth.getSession();
       if (meErr) throw meErr;
-      const uid = me.user?.id;
+      const uid = me.session?.user?.id;
       if (!uid) throw new Error("No signed-in user.");
 
       setDemoStatus("Creating project…");
@@ -330,7 +320,7 @@ export default function Settings() {
   return (
     <main style={{ maxWidth: 960, margin: "0 auto", padding: "24px" }}>
       <p style={{ marginTop: 8, color: "#666" }}>
-        Build marker: <b>SETTINGS-V3-NOTIMEOUT</b>
+        Build marker: <b>SETTINGS-V4-NOAUTHGETUSER</b>
       </p>
 
       <header
@@ -380,8 +370,8 @@ export default function Settings() {
           {/* Serverless seeder */}
           <div className="card" style={{ marginBottom: 16 }}>
             <p>
-              <strong>Seed via API:</strong> Creates/reuses Demo Org, Warehouse Expansion
-              project, one estimate, and sample items (idempotent).
+              <strong>Seed via API:</strong> Creates/reuses Demo Org, Warehouse
+              Expansion project, one estimate, and sample items (idempotent).
             </p>
             <button className="button" disabled={apiBusy} onClick={seedDemoViaApi}>
               {apiBusy ? "Seeding…" : "Seed Demo (serverless)"}
@@ -393,8 +383,8 @@ export default function Settings() {
           {/* Legacy direct insert */}
           <div className="card" style={{ marginBottom: 16 }}>
             <p>
-              <strong>Legacy step:</strong> Directly create a demo project (may create
-              duplicates).
+              <strong>Legacy step:</strong> Directly create a demo project (may
+              create duplicates).
             </p>
             <button
               className="button"
