@@ -695,7 +695,7 @@ export default function EstimatePage() {
         Build marker: <strong>PROJECT-ESTIMATE-V8-PROJECT-EDIT</strong>
       </div>
 
-      <header className="flex items-center justify-between mb-4">
+      <header className="flex items-center justify-between mb-6">
         <nav className="text-sm">
           <Link href="/" className="text-blue-600 hover:underline">
             ← Home
@@ -714,14 +714,14 @@ export default function EstimatePage() {
       {!loading && !error && project && (
         <div className="space-y-8">
           {/* Project header (editable) */}
-          <section className="rounded-lg border p-4 space-y-3">
-            <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
-              <div className="flex-1">
-                <label className="block text-xs text-gray-500 mb-1">
+          <section className="rounded-lg border p-5 space-y-4 bg-white">
+            <div className="flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
+              <div className="flex-1 space-y-1.5">
+                <label className="block text-xs font-medium text-gray-600">
                   Project name
                 </label>
                 <input
-                  className="w-full border rounded px-2 py-1 text-lg font-bold"
+                  className="w-full border rounded-md px-3 py-2 text-lg font-semibold"
                   value={projectDraft.name}
                   onChange={(e) =>
                     setProjectDraft((prev) => ({
@@ -733,7 +733,7 @@ export default function EstimatePage() {
               </div>
               <button
                 type="button"
-                className="self-start bg-blue-600 text-white text-sm px-4 py-2 rounded hover:bg-blue-700 disabled:opacity-60"
+                className="mt-2 md:mt-0 bg-blue-600 text-white text-sm px-4 py-2 rounded-md hover:bg-blue-700 disabled:opacity-60"
                 onClick={handleSaveProjectHeader}
                 disabled={savingProject}
               >
@@ -741,13 +741,13 @@ export default function EstimatePage() {
               </button>
             </div>
 
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-sm">
-              <div>
-                <label className="block text-xs text-gray-500 mb-1">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div className="space-y-1.5">
+                <label className="block text-xs font-medium text-gray-600">
                   Client name
                 </label>
                 <input
-                  className="w-full border rounded px-2 py-1"
+                  className="w-full border rounded-md px-3 py-2 text-sm"
                   value={projectDraft.clientName}
                   onChange={(e) =>
                     setProjectDraft((prev) => ({
@@ -757,12 +757,12 @@ export default function EstimatePage() {
                   }
                 />
               </div>
-              <div>
-                <label className="block text-xs text-gray-500 mb-1">
+              <div className="space-y-1.5">
+                <label className="block text-xs font-medium text-gray-600">
                   Location
                 </label>
                 <input
-                  className="w-full border rounded px-2 py-1"
+                  className="w-full border rounded-md px-3 py-2 text-sm"
                   value={projectDraft.location}
                   onChange={(e) =>
                     setProjectDraft((prev) => ({
@@ -774,12 +774,12 @@ export default function EstimatePage() {
               </div>
             </div>
 
-            <div>
-              <label className="block text-xs text-gray-500 mb-1">
+            <div className="space-y-1.5">
+              <label className="block text-xs font-medium text-gray-600">
                 Project description
               </label>
               <textarea
-                className="w-full border rounded px-2 py-1 text-sm"
+                className="w-full border rounded-md px-3 py-2 text-sm"
                 rows={3}
                 value={projectDraft.description}
                 onChange={(e) =>
@@ -798,7 +798,7 @@ export default function EstimatePage() {
           </section>
 
           {/* Estimate summary */}
-          <section className="rounded-lg border p-4">
+          <section className="rounded-lg border p-4 bg-white">
             <h2 className="text-xl font-semibold mb-2">
               {estimate ? estimate.title : "No estimate yet"}
             </h2>
@@ -833,7 +833,7 @@ export default function EstimatePage() {
           </section>
 
           {/* Template picker + line item editor */}
-          <section className="rounded-lg border p-4">
+          <section className="rounded-lg border p-4 bg-white">
             <div className="flex flex-col md:flex-row md:items-end md:justify-between gap-3 mb-4">
               <div className="flex-1">
                 <h3 className="text-lg font-semibold mb-1">Add from template</h3>
@@ -841,7 +841,7 @@ export default function EstimatePage() {
                   Choose a system, material, or labor rate to insert a new row.
                 </label>
                 <select
-                  className="w-full md:w-96 border rounded px-2 py-1 text-sm"
+                  className="w-full md:w-96 border rounded-md px-2 py-1.5 text-sm"
                   value={selectedTemplateId}
                   onChange={(e) => setSelectedTemplateId(e.target.value)}
                 >
@@ -877,14 +877,14 @@ export default function EstimatePage() {
               <div className="flex gap-2">
                 <button
                   type="button"
-                  className="bg-blue-600 text-white text-sm px-3 py-2 rounded hover:bg-blue-700"
+                  className="bg-blue-600 text-white text-sm px-3 py-2 rounded-md hover:bg-blue-700"
                   onClick={handleAddFromTemplate}
                 >
                   Add line from template
                 </button>
                 <button
                   type="button"
-                  className="border text-sm px-3 py-2 rounded hover:bg-gray-50"
+                  className="border text-sm px-3 py-2 rounded-md hover:bg-gray-50"
                   onClick={handleAddBlankItem}
                 >
                   Add blank line
@@ -1050,7 +1050,7 @@ export default function EstimatePage() {
                 <div className="mt-3 flex justify-end">
                   <button
                     type="button"
-                    className="bg-blue-600 text-white text-sm px-4 py-2 rounded hover:bg-blue-700 disabled:opacity-60"
+                    className="bg-blue-600 text-white text-sm px-4 py-2 rounded-md hover:bg-blue-700 disabled:opacity-60"
                     onClick={handleSaveItems}
                     disabled={savingItems}
                   >
@@ -1062,7 +1062,7 @@ export default function EstimatePage() {
           </section>
 
           {/* Totals panel */}
-          <section className="rounded-lg border p-4">
+          <section className="rounded-lg border p-4 bg-white">
             <h3 className="text-lg font-semibold mb-2">Totals (quick view)</h3>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm">
               <div>
@@ -1098,7 +1098,7 @@ export default function EstimatePage() {
             </div>
           </section>
 
-          <section className="rounded-lg border p-4 text-xs text-gray-500">
+          <section className="rounded-lg border p-4 text-xs text-gray-500 bg-white">
             <div>
               Org Settings: {settings ? "loaded" : "—"} • Tax Scope:{" "}
               {tax ? "loaded" : "—"} • Tiers: {tiers.length}
