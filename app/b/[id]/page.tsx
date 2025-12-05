@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
-import { useParams } from "next/navigation";
+import { useParams, useRouter } from "next/navigation";
 import { supabase } from "../../../lib/supabaseClient";
 
 // ---------- Types (lightweight, for hints only) ----------
@@ -332,6 +332,7 @@ const LINE_ITEM_TEMPLATES: LineItemTemplate[] = [
 export default function EstimatePage() {
   const params = useParams<{ id: string }>();
   const projectId = params?.id;
+  const router = useRouter();
 
   const [loading, setLoading] = useState(true);
   const [savingItems, setSavingItems] = useState(false);
@@ -633,6 +634,64 @@ export default function EstimatePage() {
     }
   }
 
+  async function handleDeleteProject() {
+    if (!project) return;
+
+    const confirmed =
+      typeof window !== "undefined"
+        ? window.confirm(
+            "Delete this project and all its estimates/items? This cannot be undone."
+          )
+        : false;
+    if (!confirmed) return;
+
+    try {
+      setSavingProject(true);
+      setError(null);
+
+      // Fetch all estimates for this project
+      const { data: ests, error: estErr } = await supabase
+        .from("Estimate")
+        .select("id")
+        .eq("projectId", project.id);
+
+      if (estErr) throw estErr;
+
+      const estIds = (ests ?? []).map((e) => e.id);
+
+      if (estIds.length) {
+        // Delete items for those estimates
+        const { error: itErr } = await supabase
+          .from("EstimateItem")
+          .delete()
+          .in("estimateId", estIds);
+        if (itErr) throw itErr;
+
+        // Delete the estimates themselves
+        const { error: delEstErr } = await supabase
+          .from("Estimate")
+          .delete()
+          .in("id", estIds);
+        if (delEstErr) throw delEstErr;
+      }
+
+      // Delete the project
+      const { error: projErr } = await supabase
+        .from("Project")
+        .delete()
+        .eq("id", project.id);
+      if (projErr) throw projErr;
+
+      // Navigate home
+      router.push("/");
+    } catch (err: any) {
+      console.error("Delete project failed:", err);
+      setError(err?.message ?? String(err));
+    } finally {
+      setSavingProject(false);
+    }
+  }
+
   // ---------- Totals ----------
   const totals = useMemo(() => {
     const subtotal = items.reduce(
@@ -693,7 +752,7 @@ export default function EstimatePage() {
     <div className="mx-auto max-w-5xl p-6">
       {/* Build marker so we know this bundle is live */}
       <div className="text-xs text-gray-500 mb-2">
-        Build marker: <strong>PROJECT-ESTIMATE-V9-LAYOUT</strong>
+        Build marker: <strong>PROJECT-ESTIMATE-V10-DELETE</strong>
       </div>
 
       <header className="flex items-center justify-between mb-4">
@@ -722,7 +781,7 @@ export default function EstimatePage() {
           <section className="rounded-lg border p-4 space-y-4">
             <h1 className="text-xl font-bold mb-1">Project</h1>
 
-            <div className="space-y-3 max-w-xl">
+            <div className="space-y-4 max-w-xl">
               <div className="flex flex-col gap-1">
                 <label className="text-sm font-medium">Project name</label>
                 <input
@@ -779,18 +838,28 @@ export default function EstimatePage() {
                 />
               </div>
 
-              <div className="text-xs text-gray-500 mt-1">
+              <div className="text-xs text-gray-500 mt-2">
                 Project ID: <span className="font-mono">{project.id}</span>
               </div>
 
-              <button
-                type="button"
-                onClick={handleSaveProjectHeader}
-                disabled={savingProject}
-                className="inline-flex items-center rounded bg-blue-600 px-3 py-1 text-sm font-medium text-white disabled:opacity-60"
-              >
-                {savingProject ? "Saving…" : "Save project"}
-              </button>
+              <div className="flex items-center gap-3 pt-1">
+                <button
+                  type="button"
+                  onClick={handleSaveProjectHeader}
+                  disabled={savingProject}
+                  className="inline-flex items-center rounded bg-blue-600 px-3 py-1 text-sm font-medium text-white disabled:opacity-60"
+                >
+                  {savingProject ? "Saving…" : "Save project"}
+                </button>
+                <button
+                  type="button"
+                  onClick={handleDeleteProject}
+                  disabled={savingProject}
+                  className="inline-flex items-center rounded border border-red-500 px-3 py-1 text-sm font-medium text-red-600 hover:bg-red-50 disabled:opacity-60"
+                >
+                  Delete project
+                </button>
+              </div>
             </div>
           </section>
 
