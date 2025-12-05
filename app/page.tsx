@@ -44,7 +44,7 @@ export default function Home() {
       return;
     }
 
-    // NEW: call the simpler RPC that uses auth.uid() internally
+    // RPC that uses auth.uid() internally
     const { data, error } = await supabase.rpc("list_my_projects");
     if (error) {
       setErrMsg(error.message);
@@ -56,7 +56,6 @@ export default function Home() {
 
   useEffect(() => {
     fetchProjects();
-    // also refetch when auth state changes (e.g., after magic link)
     const { data: sub } = supabase.auth.onAuthStateChange(() => {
       fetchProjects();
     });
@@ -65,24 +64,42 @@ export default function Home() {
 
   return (
     <main style={{ maxWidth: 960, margin: "0 auto", padding: "24px" }}>
-      <header style={{ display: "flex", gap: 16 }}>
-        <Link href="/">Home</Link>
-        <Link href="/settings">Settings</Link>
-        <div style={{ marginLeft: "auto", fontWeight: 700 }}>Concrete Estimator</div>
-      </header>
+      {/* Build marker so we know this version is live */}
+      <p style={{ marginTop: 8, color: "#666" }}>
+        Build marker: <b>HOME-V6-SINGLE-NAV</b>
+      </p>
 
-      <p style={{ marginTop: 12, color: "#666" }}>Build marker: <b>HOME-V5-MYRPC</b></p>
-
-      <details open={showDebug} style={{ marginTop: 12 }}>
+      <details
+        open={showDebug}
+        style={{ marginTop: 12 }}
+        onToggle={(e) => setShowDebug((e.target as HTMLDetailsElement).open)}
+      >
         <summary style={{ cursor: "pointer", fontWeight: 700 }}>Debug</summary>
         <div style={{ fontFamily: "monospace", marginTop: 8 }}>
-          <div><b>userId:</b> {userId ?? "(not signed in)"}</div>
-          <div><b>email:</b> {sessionEmail ?? "-"}</div>
-          <div><b>projects count:</b> {projects?.length ?? 0}</div>
-          {errMsg && <div style={{ color: "crimson" }}><b>error:</b> {errMsg}</div>}
+          <div>
+            <b>userId:</b> {userId ?? "(not signed in)"}
+          </div>
+          <div>
+            <b>email:</b> {sessionEmail ?? "-"}
+          </div>
+          <div>
+            <b>projects count:</b> {projects?.length ?? 0}
+          </div>
+          {errMsg && (
+            <div style={{ color: "crimson" }}>
+              <b>error:</b> {errMsg}
+            </div>
+          )}
         </div>
-        <pre style={{ background: "#f6f8fa", padding: 12, borderRadius: 6, overflow: "auto" }}>
-{JSON.stringify(projects, null, 2)}
+        <pre
+          style={{
+            background: "#f6f8fa",
+            padding: 12,
+            borderRadius: 6,
+            overflow: "auto",
+          }}
+        >
+          {JSON.stringify(projects, null, 2)}
         </pre>
         <button
           disabled={loading}
@@ -93,14 +110,13 @@ export default function Home() {
         </button>
       </details>
 
-      <h1 style={{ marginTop: 24 }}>
-        Welcome, {sessionEmail ?? "friend"} 
-      </h1>
+      <h1 style={{ marginTop: 24 }}>Welcome, {sessionEmail ?? "friend"}</h1>
 
       {/* main content */}
       {errMsg ? (
         <p style={{ color: "crimson" }}>
-          Couldn’t load projects: {errMsg} <button onClick={() => fetchProjects()}>Retry</button>
+          Couldn’t load projects: {errMsg}{" "}
+          <button onClick={() => fetchProjects()}>Retry</button>
         </p>
       ) : projects === null ? (
         <p>Loading…</p>
@@ -114,14 +130,22 @@ export default function Home() {
               padding: 16,
             }}
           >
-            <p><b>Next steps:</b></p>
+            <p>
+              <b>Next steps:</b>
+            </p>
             <ol>
-              <li>Open <Link href="/settings">Settings</Link> and click <b>Initialize Demo Data</b>.</li>
-              <li>Return here to see your sample project and make a printable bid.</li>
+              <li>
+                Open <Link href="/settings">Settings</Link> and click{" "}
+                <b>Initialize Demo Data</b>.
+              </li>
+              <li>
+                Return here to see your sample project and make a printable bid.
+              </li>
             </ol>
           </div>
           <p style={{ marginTop: 16 }}>
-            No projects yet. Go to <Link href="/settings">Settings</Link> and click <b>Initialize Demo Data</b>.
+            No projects yet. Go to <Link href="/settings">Settings</Link> and
+            click <b>Initialize Demo Data</b>.
           </p>
         </div>
       ) : (
@@ -130,8 +154,11 @@ export default function Home() {
           <ul style={{ marginTop: 8 }}>
             {projects.map((p) => (
               <li key={p.id}>
-                <Link href={`/b/${p.id}`}>{p.name}</Link> 
-                <span style={{ color: "#666" }}> — {new Date(p.createdAt).toLocaleString()}</span>
+                <Link href={`/b/${p.id}`}>{p.name}</Link>
+                <span style={{ color: "#666" }}>
+                  {" "}
+                  — {new Date(p.createdAt).toLocaleString()}
+                </span>
               </li>
             ))}
           </ul>
