@@ -12,6 +12,7 @@ type Project = {
   orgId: string;
   clientName?: string | null;
   location?: string | null;
+  description?: string | null;
   createdat?: string | null;
 };
 
@@ -90,9 +91,8 @@ type LineItemTemplate = {
 };
 
 // Very lightweight set derived from your CSVs for MVP.
-// We can expand later, but this gives you real options now.
 const LINE_ITEM_TEMPLATES: LineItemTemplate[] = [
-  // --- System / turnkey items (from line_item_templates_template.csv) ---
+  // --- System / turnkey items ---
   {
     id: "sys-sidewalk-4-9",
     group: "SYSTEM",
@@ -100,7 +100,7 @@ const LINE_ITEM_TEMPLATES: LineItemTemplate[] = [
     kind: "SIDEWALK",
     description: 'Sidewalk 4" @ $9/SF',
     unit: "SF",
-    defaultQuantity: 100, // arbitrary MVP default
+    defaultQuantity: 100,
     defaultUnitCost: 9,
     isMaterial: true,
     isLabor: true,
@@ -190,7 +190,7 @@ const LINE_ITEM_TEMPLATES: LineItemTemplate[] = [
     isLabor: true,
   },
 
-  // --- Materials (from materials_template.csv) ---
+  // --- Materials ---
   {
     id: "mat-concrete-3000",
     group: "MATERIAL",
@@ -280,7 +280,7 @@ const LINE_ITEM_TEMPLATES: LineItemTemplate[] = [
     isMaterial: true,
   },
 
-  // --- Labor (from labor_rates_template.csv) ---
+  // --- Labor ---
   {
     id: "lab-laborer",
     group: "LABOR",
@@ -333,9 +333,17 @@ export default function EstimatePage() {
 
   const [loading, setLoading] = useState(true);
   const [savingItems, setSavingItems] = useState(false);
+  const [savingProject, setSavingProject] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const [project, setProject] = useState<Project | null>(null);
+  const [projectDraft, setProjectDraft] = useState({
+    name: "",
+    clientName: "",
+    location: "",
+    description: "",
+  });
+
   const [estimate, setEstimate] = useState<Estimate | null>(null);
   const [items, setItems] = useState<EstimateItem[]>([]);
   const [settings, setSettings] = useState<OrgSettings | null>(null);
@@ -364,7 +372,15 @@ export default function EstimatePage() {
         if (pErr) throw pErr;
         if (!p) throw new Error("Project not found");
         if (!isMounted) return;
-        setProject(p as Project);
+
+        const proj = p as Project;
+        setProject(proj);
+        setProjectDraft({
+          name: proj.name ?? "",
+          clientName: proj.clientName ?? "",
+          location: proj.location ?? "",
+          description: proj.description ?? "",
+        });
 
         // 2) Latest Estimate
         const { data: est, error: estErr } = await supabase
@@ -392,7 +408,6 @@ export default function EstimatePage() {
               const ra = a?.rank ?? 0;
               const rb = b?.rank ?? 0;
               if (ra !== rb) return ra - rb;
-              // stable tiebreaker
               return String(a?.id ?? "").localeCompare(String(b?.id ?? ""));
             });
 
@@ -402,8 +417,8 @@ export default function EstimatePage() {
           setItems([]);
         }
 
-        // 4) Settings / Tax / Tiers (fetch raw; sort tiers client-side)
-        if (p?.orgId) {
+        // 4) Settings / Tax / Tiers
+        if (proj.orgId) {
           const [
             { data: s, error: sErr },
             { data: t, error: tErr },
@@ -412,14 +427,14 @@ export default function EstimatePage() {
             supabase
               .from("OrgSettings")
               .select("*")
-              .eq("orgId", p.orgId)
+              .eq("orgId", proj.orgId)
               .maybeSingle(),
             supabase
               .from("TaxScope")
               .select("*")
-              .eq("orgId", p.orgId)
+              .eq("orgId", proj.orgId)
               .maybeSingle(),
-            supabase.from("MarkupTier").select("*").eq("orgId", p.orgId),
+            supabase.from("MarkupTier").select("*").eq("orgId", proj.orgId),
           ]);
           if (sErr) throw sErr;
           if (tErr) throw tErr;
@@ -457,6 +472,37 @@ export default function EstimatePage() {
       isMounted = false;
     };
   }, [projectId]);
+
+  // ----------------- Project header save -----------------
+  async function handleSaveProjectHeader() {
+    if (!project) return;
+    try {
+      setSavingProject(true);
+      setError(null);
+
+      const { data, error: upErr } = await supabase
+        .from("Project")
+        .update({
+          name: projectDraft.name,
+          clientName: projectDraft.clientName || null,
+          location: projectDraft.location || null,
+          description: projectDraft.description || null,
+        })
+        .eq("id", project.id)
+        .select("*")
+        .maybeSingle();
+
+      if (upErr) throw upErr;
+      if (data) {
+        setProject(data as Project);
+      }
+    } catch (err: any) {
+      console.error("Save project header failed:", err);
+      setError(err?.message ?? String(err));
+    } finally {
+      setSavingProject(false);
+    }
+  }
 
   // ----------------- Line-item helpers -----------------
 
@@ -543,7 +589,7 @@ export default function EstimatePage() {
     if (!tpl) return;
 
     const newItem: EstimateItem = {
-      id: crypto.randomUUID(), // client-generated UUID; DB PK is uuid
+      id: crypto.randomUUID(),
       estimateId: estimate.id,
       kind: tpl.kind,
       description: tpl.description,
@@ -646,7 +692,7 @@ export default function EstimatePage() {
     <div className="mx-auto max-w-5xl p-6">
       {/* Build marker to confirm the new bundle is live */}
       <div className="text-xs text-gray-500 mb-2">
-        Build marker: <strong>PROJECT-ESTIMATE-V7-EDITOR</strong>
+        Build marker: <strong>PROJECT-ESTIMATE-V8-PROJECT-EDIT</strong>
       </div>
 
       <header className="flex items-center justify-between mb-4">
@@ -667,14 +713,88 @@ export default function EstimatePage() {
 
       {!loading && !error && project && (
         <div className="space-y-8">
-          {/* Project header */}
-          <section className="rounded-lg border p-4">
-            <h1 className="text-2xl font-bold">{project.name}</h1>
-            <p className="text-sm text-gray-600">
-              Client: {project.clientName ?? "—"} • Location:{" "}
-              {project.location ?? "—"}
+          {/* Project header (editable) */}
+          <section className="rounded-lg border p-4 space-y-3">
+            <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
+              <div className="flex-1">
+                <label className="block text-xs text-gray-500 mb-1">
+                  Project name
+                </label>
+                <input
+                  className="w-full border rounded px-2 py-1 text-lg font-bold"
+                  value={projectDraft.name}
+                  onChange={(e) =>
+                    setProjectDraft((prev) => ({
+                      ...prev,
+                      name: e.target.value,
+                    }))
+                  }
+                />
+              </div>
+              <button
+                type="button"
+                className="self-start bg-blue-600 text-white text-sm px-4 py-2 rounded hover:bg-blue-700 disabled:opacity-60"
+                onClick={handleSaveProjectHeader}
+                disabled={savingProject}
+              >
+                {savingProject ? "Saving…" : "Save project"}
+              </button>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-sm">
+              <div>
+                <label className="block text-xs text-gray-500 mb-1">
+                  Client name
+                </label>
+                <input
+                  className="w-full border rounded px-2 py-1"
+                  value={projectDraft.clientName}
+                  onChange={(e) =>
+                    setProjectDraft((prev) => ({
+                      ...prev,
+                      clientName: e.target.value,
+                    }))
+                  }
+                />
+              </div>
+              <div>
+                <label className="block text-xs text-gray-500 mb-1">
+                  Location
+                </label>
+                <input
+                  className="w-full border rounded px-2 py-1"
+                  value={projectDraft.location}
+                  onChange={(e) =>
+                    setProjectDraft((prev) => ({
+                      ...prev,
+                      location: e.target.value,
+                    }))
+                  }
+                />
+              </div>
+            </div>
+
+            <div>
+              <label className="block text-xs text-gray-500 mb-1">
+                Project description
+              </label>
+              <textarea
+                className="w-full border rounded px-2 py-1 text-sm"
+                rows={3}
+                value={projectDraft.description}
+                onChange={(e) =>
+                  setProjectDraft((prev) => ({
+                    ...prev,
+                    description: e.target.value,
+                  }))
+                }
+                placeholder="Scope notes, phasing, constraints, etc."
+              />
+            </div>
+
+            <p className="text-xs text-gray-400 mt-1">
+              Project ID: {project.id}
             </p>
-            <p className="text-xs text-gray-400 mt-1">Project ID: {project.id}</p>
           </section>
 
           {/* Estimate summary */}
