@@ -3,10 +3,10 @@
 import { useEffect, useState } from "react";
 import { supabase } from "../../lib/supabaseClient";
 
-// lightweight shape
+// lightweight shapes
 type Org = { id: string; name: string };
 
-// Small helper to avoid hanging forever on bad network calls
+// Small helper so auth.getUser() can’t hang forever
 async function withTimeout<T>(p: Promise<T>, ms = 15000): Promise<T> {
   return new Promise((resolve, reject) => {
     const id = setTimeout(() => reject(new Error("Request timed out")), ms);
@@ -74,21 +74,19 @@ export default function Settings() {
   useEffect(() => {
     let mounted = true;
 
-    // watch auth changes (magic-link return, sign out)
-    const { data: sub } = supabase.auth.onAuthStateChange(
-      async (_event, session) => {
-        if (!mounted) return;
-        const uid = session?.user?.id ?? null;
-        const email = session?.user?.email ?? null;
-        setUserId(uid);
-        setUserEmail(email);
-        if (uid) {
-          await loadOrgAndConfig(uid);
-        } else {
-          setLoading(false);
-        }
+    // watch auth changes (magic-link return, sign-out, etc.)
+    const { data: sub } = supabase.auth.onAuthStateChange(async (_event, session) => {
+      if (!mounted) return;
+      const uid = session?.user?.id ?? null;
+      const email = session?.user?.email ?? null;
+      setUserId(uid);
+      setUserEmail(email);
+      if (uid) {
+        await loadOrgAndConfig(uid);
+      } else {
+        setLoading(false);
       }
-    );
+    });
 
     // initial check
     (async () => {
@@ -96,6 +94,7 @@ export default function Settings() {
         setLoading(true);
         setErrorText(null);
 
+        // timeout only here
         const { data, error } = await withTimeout(supabase.auth.getUser());
         if (error) throw error;
 
@@ -127,7 +126,7 @@ export default function Settings() {
       setLoading(true);
       setErrorText(null);
 
-      // find an org via membership (or create)
+      // find an org via membership (or create one)
       let orgId: string | null = null;
       const { data: mems, error: memErr } = await supabase
         .from("Membership")
@@ -159,16 +158,23 @@ export default function Settings() {
       if (orgLoadErr) throw orgLoadErr;
       setOrg(orgRow as Org);
 
+      // Ensure defaults exist
       await ensureDefaults(orgId!);
 
-      // wrap settings/tax/tiers load in timeout too
-      const [{ data: S }, { data: T }, { data: MK }] = await withTimeout(
-        Promise.all([
-          supabase.from("OrgSettings").select("*").eq('"orgId"', orgId!).single(),
-          supabase.from("TaxScope").select("*").eq('"orgId"', orgId!).single(),
-          supabase.from("MarkupTier").select("*").eq('"orgId"', orgId!),
-        ])
-      );
+      // Load config (no timeout wrapper here)
+      const [
+        { data: S, error: sErr },
+        { data: T, error: tErr },
+        { data: MK, error: mkErr },
+      ] = await Promise.all([
+        supabase.from("OrgSettings").select("*").eq('"orgId"', orgId!).single(),
+        supabase.from("TaxScope").select("*").eq('"orgId"', orgId!).single(),
+        supabase.from("MarkupTier").select("*").eq('"orgId"', orgId!),
+      ]);
+
+      if (sErr) throw sErr;
+      if (tErr) throw tErr;
+      if (mkErr) throw mkErr;
 
       setSettings(S);
       setTax(T);
@@ -197,9 +203,7 @@ export default function Settings() {
         body: JSON.stringify({ userId }),
       });
       const json = await res.json();
-      if (!res.ok || !json?.ok) {
-        throw new Error(json?.error ?? "Failed to seed demo data");
-      }
+      if (!res.ok || !json?.ok) throw new Error(json?.error ?? "Failed to seed demo data");
       setApiMsg(
         `Demo ready — org:${json.summary.org}, project:${json.summary.project}, estimate:${json.summary.estimate}, items:${json.summary.items}`
       );
@@ -210,7 +214,7 @@ export default function Settings() {
     }
   }
 
-  // legacy direct insert demo
+  // Legacy direct insert demo
   const initDemoProject = async (orgId: string) => {
     setDemoStatus(null);
     setDemoBusy(true);
@@ -299,9 +303,7 @@ export default function Settings() {
       setDemoStatus("✅ Demo project created! Go to Home to see it.");
     } catch (err: any) {
       console.error("Init demo data failed:", err);
-      setDemoStatus(
-        `❌ Initialize Demo Data failed: ${err?.message || String(err)}`
-      );
+      setDemoStatus(`❌ Initialize Demo Data failed: ${err?.message || String(err)}`);
     } finally {
       setDemoBusy(false);
     }
@@ -314,12 +316,9 @@ export default function Settings() {
       await supabase
         .from("TaxScope")
         .upsert({ orgId: org.id, ...tax }, { onConflict: "orgId" });
+
       await supabase.from("MarkupTier").delete().eq('"orgId"', org.id);
-      const toInsert = tiers.map((t: any) => ({
-        ...t,
-        id: undefined,
-        orgId: org.id,
-      }));
+      const toInsert = tiers.map((t: any) => ({ ...t, id: undefined, orgId: org.id }));
       if (toInsert.length) await supabase.from("MarkupTier").insert(toInsert);
       alert("Saved!");
     } catch (e: any) {
@@ -329,10 +328,9 @@ export default function Settings() {
 
   // ---------- render ----------
   return (
-    <div className="container" style={{ maxWidth: 960, margin: "0 auto", padding: 24 }}>
-      {/* build marker so we can confirm this version */}
+    <main style={{ maxWidth: 960, margin: "0 auto", padding: "24px" }}>
       <p style={{ marginTop: 8, color: "#666" }}>
-        Build marker: <strong>SETTINGS-V2-TIMEOUT</strong>
+        Build marker: <b>SETTINGS-V3-NOTIMEOUT</b>
       </p>
 
       <header
@@ -340,18 +338,13 @@ export default function Settings() {
           display: "flex",
           justifyContent: "space-between",
           alignItems: "center",
-          marginTop: 16,
           marginBottom: 12,
         }}
       >
-        <h1 className="title" style={{ fontSize: 28 }}>
-          Settings
-        </h1>
+        <h1 className="title">Settings</h1>
         <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
           <span className="text-sm">
-            {userId
-              ? `Signed in${userEmail ? `: ${userEmail}` : ""}`
-              : "Not signed in"}
+            {userId ? `Signed in${userEmail ? `: ${userEmail}` : ""}` : "Not signed in"}
           </span>
           {!userId ? (
             <button className="button secondary" onClick={signInWithEmail}>
@@ -366,10 +359,7 @@ export default function Settings() {
       </header>
 
       {errorText && (
-        <div
-          className="card"
-          style={{ color: "crimson", marginBottom: 16 }}
-        >
+        <div className="card" style={{ color: "crimson", marginBottom: 16 }}>
           {errorText}
         </div>
       )}
@@ -377,7 +367,7 @@ export default function Settings() {
       {loading && <div className="card">Loading…</div>}
 
       {!loading && !userId && (
-        <div className="card" style={{ marginTop: 16 }}>
+        <div className="card">
           <p>Sign in with a magic link to manage your org and seed demo data.</p>
           <button className="button" onClick={signInWithEmail}>
             Send magic link
@@ -390,29 +380,21 @@ export default function Settings() {
           {/* Serverless seeder */}
           <div className="card" style={{ marginBottom: 16 }}>
             <p>
-              <strong>Seed via API:</strong> Creates/reuses Demo Org, Warehouse
-              Expansion project, one estimate, and sample items (idempotent).
+              <strong>Seed via API:</strong> Creates/reuses Demo Org, Warehouse Expansion
+              project, one estimate, and sample items (idempotent).
             </p>
-            <button
-              className="button"
-              disabled={apiBusy}
-              onClick={seedDemoViaApi}
-            >
+            <button className="button" disabled={apiBusy} onClick={seedDemoViaApi}>
               {apiBusy ? "Seeding…" : "Seed Demo (serverless)"}
             </button>
-            {apiMsg && (
-              <p style={{ marginTop: 8, color: "green" }}>{apiMsg}</p>
-            )}
-            {apiErr && (
-              <p style={{ marginTop: 8, color: "crimson" }}>{apiErr}</p>
-            )}
+            {apiMsg && <p style={{ marginTop: 8, color: "green" }}>{apiMsg}</p>}
+            {apiErr && <p style={{ marginTop: 8, color: "crimson" }}>{apiErr}</p>}
           </div>
 
           {/* Legacy direct insert */}
           <div className="card" style={{ marginBottom: 16 }}>
             <p>
-              <strong>Legacy step:</strong> Directly create a demo project (may
-              create duplicates).
+              <strong>Legacy step:</strong> Directly create a demo project (may create
+              duplicates).
             </p>
             <button
               className="button"
@@ -424,12 +406,11 @@ export default function Settings() {
             {demoStatus && <p style={{ marginTop: 8 }}>{demoStatus}</p>}
           </div>
 
-          {/* Only show the rest if org + settings loaded */}
+          {/* Only show config if org + settings loaded */}
           {!org || !settings || !tax ? (
             <div className="card">Loading organization config…</div>
           ) : (
             <>
-              {/* Branding */}
               <div className="card" style={{ marginBottom: 16 }}>
                 <h2 className="text-lg">Branding</h2>
                 <div className="field">
@@ -484,7 +465,6 @@ export default function Settings() {
                 </div>
               </div>
 
-              {/* Cost behavior */}
               <div className="card" style={{ marginBottom: 16 }}>
                 <h2 className="text-lg">Cost behavior</h2>
                 <div className="field">
@@ -510,9 +490,7 @@ export default function Settings() {
                     onChange={(e) =>
                       setSettings({
                         ...settings,
-                        defaultContingency: parseFloat(
-                          e.target.value || "0"
-                        ),
+                        defaultContingency: parseFloat(e.target.value || "0"),
                       })
                     }
                   />
@@ -522,10 +500,7 @@ export default function Settings() {
                   <select
                     value={settings.contingencyOrder}
                     onChange={(e) =>
-                      setSettings({
-                        ...settings,
-                        contingencyOrder: e.target.value,
-                      })
+                      setSettings({ ...settings, contingencyOrder: e.target.value })
                     }
                   >
                     <option value="AFTER_MARKUP">After markup</option>
@@ -540,9 +515,7 @@ export default function Settings() {
                     onChange={(e) =>
                       setSettings({
                         ...settings,
-                        mobilizationPrice: parseFloat(
-                          e.target.value || "0"
-                        ),
+                        mobilizationPrice: parseFloat(e.target.value || "0"),
                       })
                     }
                   />
@@ -555,18 +528,14 @@ export default function Settings() {
                     onChange={(e) =>
                       setSettings({
                         ...settings,
-                        crewHoursPerDay: parseInt(
-                          e.target.value || "8",
-                          10
-                        ),
+                        crewHoursPerDay: parseInt(e.target.value || "8", 10),
                       })
                     }
                   />
                 </div>
               </div>
 
-              {/* Tax */}
-              <div className="card" style={{ marginBottom: 16 }}>
+              <div className="card">
                 <h2 className="text-lg">Tax</h2>
                 <div className="field">
                   <label>Tax rate (%)</label>
@@ -574,10 +543,7 @@ export default function Settings() {
                     type="number"
                     value={tax.rate ?? 0}
                     onChange={(e) =>
-                      setTax({
-                        ...tax,
-                        rate: parseFloat(e.target.value || "0"),
-                      })
+                      setTax({ ...tax, rate: parseFloat(e.target.value || "0") })
                     }
                   />
                 </div>
@@ -635,10 +601,7 @@ export default function Settings() {
                       type="checkbox"
                       checked={!!tax.taxContingency}
                       onChange={(e) =>
-                        setTax({
-                          ...tax,
-                          taxContingency: e.target.checked,
-                        })
+                        setTax({ ...tax, taxContingency: e.target.checked })
                       }
                     />{" "}
                     Contingency
@@ -646,8 +609,7 @@ export default function Settings() {
                 </div>
               </div>
 
-              {/* Markup tiers */}
-              <div className="card">
+              <div className="card" style={{ marginTop: 16 }}>
                 <h2 className="text-lg">Markup tiers</h2>
                 <table className="table">
                   <thead>
@@ -681,9 +643,7 @@ export default function Settings() {
                             onChange={(e) =>
                               updateTier(i, {
                                 ...t,
-                                minAmount: parseFloat(
-                                  e.target.value || "0"
-                                ),
+                                minAmount: parseFloat(e.target.value || "0"),
                               })
                             }
                           />
@@ -710,9 +670,7 @@ export default function Settings() {
                             onChange={(e) =>
                               updateTier(i, {
                                 ...t,
-                                percent: parseFloat(
-                                  e.target.value || "0"
-                                ),
+                                percent: parseFloat(e.target.value || "0"),
                               })
                             }
                           />
@@ -730,10 +688,7 @@ export default function Settings() {
                   </tbody>
                 </table>
                 <div style={{ marginTop: 8 }}>
-                  <button
-                    className="button secondary"
-                    onClick={() => addTier()}
-                  >
+                  <button className="button secondary" onClick={addTier}>
                     Add tier
                   </button>{" "}
                   <button className="button" onClick={save}>
@@ -745,28 +700,32 @@ export default function Settings() {
           )}
         </>
       )}
-    </div>
+    </main>
   );
 
   // ------- local helpers for tiers -------
   function addTier() {
-    setTiers([
-      ...tiers,
+    setTiers((prev) => [
+      ...prev,
       {
-        rank: (tiers.at(-1)?.rank ?? 0) + 1,
+        rank: (prev.at(-1)?.rank ?? 0) + 1,
         minAmount: 0,
         maxAmount: null,
         percent: 10,
       },
     ]);
   }
+
   function removeTier(i: number) {
-    setTiers(tiers.filter((_, idx) => idx !== i));
+    setTiers((prev) => prev.filter((_, idx) => idx !== i));
   }
+
   function updateTier(i: number, t: any) {
-    const next = [...tiers];
-    next[i] = t;
-    setTiers(next);
+    setTiers((prev) => {
+      const next = [...prev];
+      next[i] = t;
+      return next;
+    });
   }
 }
 
