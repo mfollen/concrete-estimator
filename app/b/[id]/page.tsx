@@ -5,7 +5,7 @@ import Link from "next/link";
 import { useParams } from "next/navigation";
 import { supabase } from "../../../lib/supabaseClient";
 
-// ------- Lightweight shapes (for editor hints only)
+// ---------- Types (lightweight, for hints only) ----------
 type Project = {
   id: string;
   name: string;
@@ -89,9 +89,9 @@ type LineItemTemplate = {
   isEquipment?: boolean;
 };
 
-// Very lightweight set derived from your CSVs for MVP.
+// ---------- Template catalogue (subset for MVP) ----------
 const LINE_ITEM_TEMPLATES: LineItemTemplate[] = [
-  // --- Systems (turnkey) ---
+  // Systems / turnkey
   {
     id: "sys-sidewalk-4-9",
     group: "SYSTEM",
@@ -189,7 +189,7 @@ const LINE_ITEM_TEMPLATES: LineItemTemplate[] = [
     isLabor: true,
   },
 
-  // --- Materials ---
+  // Materials
   {
     id: "mat-concrete-3000",
     group: "MATERIAL",
@@ -213,11 +213,11 @@ const LINE_ITEM_TEMPLATES: LineItemTemplate[] = [
     isMaterial: true,
   },
   {
-    id: "mat-ca6-base-stone",
+    id: "mat-ca6-base",
     group: "MATERIAL",
     label: "CA-6 Base Stone (TON)",
     kind: "MATERIAL",
-    description: "CA-6 (Road/Base) Stone",
+    description: "CA-6 Base Stone",
     unit: "TON",
     defaultQuantity: 10,
     defaultUnitCost: 30,
@@ -235,7 +235,7 @@ const LINE_ITEM_TEMPLATES: LineItemTemplate[] = [
     isMaterial: true,
   },
   {
-    id: "mat-wire-mesh-6x6-w2-9",
+    id: "mat-wire-mesh",
     group: "MATERIAL",
     label: "Wire Mesh 6x6 W2.9/W2.9 (SF)",
     kind: "MATERIAL",
@@ -246,7 +246,7 @@ const LINE_ITEM_TEMPLATES: LineItemTemplate[] = [
     isMaterial: true,
   },
   {
-    id: "mat-vapor-barrier-10mil",
+    id: "mat-vapor-barrier",
     group: "MATERIAL",
     label: "Vapor Barrier 10 mil (SF)",
     kind: "MATERIAL",
@@ -257,7 +257,7 @@ const LINE_ITEM_TEMPLATES: LineItemTemplate[] = [
     isMaterial: true,
   },
   {
-    id: "mat-curing-compound",
+    id: "mat-curing",
     group: "MATERIAL",
     label: "Curing Compound (SF)",
     kind: "MATERIAL",
@@ -279,7 +279,7 @@ const LINE_ITEM_TEMPLATES: LineItemTemplate[] = [
     isMaterial: true,
   },
 
-  // --- Labor ---
+  // Labor
   {
     id: "lab-laborer",
     group: "LABOR",
@@ -326,6 +326,9 @@ const LINE_ITEM_TEMPLATES: LineItemTemplate[] = [
   },
 ];
 
+// -----------------------------------------------------
+// Component
+// -----------------------------------------------------
 export default function EstimatePage() {
   const params = useParams<{ id: string }>();
   const projectId = params?.id;
@@ -353,7 +356,7 @@ export default function EstimatePage() {
     LINE_ITEM_TEMPLATES[0]?.id ?? ""
   );
 
-  // ----------------- Data load -----------------
+  // ---------- Load data ----------
   useEffect(() => {
     let isMounted = true;
 
@@ -381,7 +384,7 @@ export default function EstimatePage() {
           description: proj.description ?? "",
         });
 
-        // 2) Latest Estimate
+        // 2) Latest estimate
         const { data: est, error: estErr } = await supabase
           .from("Estimate")
           .select("*")
@@ -392,7 +395,7 @@ export default function EstimatePage() {
         if (!isMounted) return;
         setEstimate(est as Estimate | null);
 
-        // 3) Items via RPC (no ORDER BY in SQL; sort in JS)
+        // 3) Items via RPC
         if (est?.id) {
           const { data: its, error: itsErr } = await supabase.rpc(
             "list_estimate_items",
@@ -416,7 +419,7 @@ export default function EstimatePage() {
           setItems([]);
         }
 
-        // 4) Settings / Tax / Tiers
+        // 4) Settings / tax / tiers
         if (proj.orgId) {
           const [
             { data: s, error: sErr },
@@ -461,8 +464,9 @@ export default function EstimatePage() {
       }
     }
 
-    if (projectId) load();
-    else {
+    if (projectId) {
+      load();
+    } else {
       setLoading(false);
       setError("Missing project id");
     }
@@ -472,39 +476,7 @@ export default function EstimatePage() {
     };
   }, [projectId]);
 
-  // ----------------- Project header save -----------------
-  async function handleSaveProjectHeader() {
-    if (!project) return;
-    try {
-      setSavingProject(true);
-      setError(null);
-
-      const { data, error: upErr } = await supabase
-        .from("Project")
-        .update({
-          name: projectDraft.name,
-          clientName: projectDraft.clientName || null,
-          location: projectDraft.location || null,
-          description: projectDraft.description || null,
-        })
-        .eq("id", project.id)
-        .select("*")
-        .maybeSingle();
-
-      if (upErr) throw upErr;
-      if (data) {
-        setProject(data as Project);
-      }
-    } catch (err: any) {
-      console.error("Save project header failed:", err);
-      setError(err?.message ?? String(err));
-    } finally {
-      setSavingProject(false);
-    }
-  }
-
-  // ----------------- Line-item helpers -----------------
-
+  // ---------- Helpers ----------
   function nextRank(): number {
     if (!items.length) return 1;
     const maxRank = items.reduce(
@@ -628,4 +600,486 @@ export default function EstimatePage() {
       contingencyPct: null,
       durationHours: null,
     };
-    setItems((prev) => [...
+    setItems((prev) => [...prev, newItem]);
+  }
+
+  async function handleSaveProjectHeader() {
+    if (!project) return;
+    try {
+      setSavingProject(true);
+      setError(null);
+
+      const { data, error: upErr } = await supabase
+        .from("Project")
+        .update({
+          name: projectDraft.name,
+          clientName: projectDraft.clientName || null,
+          location: projectDraft.location || null,
+          description: projectDraft.description || null,
+        })
+        .eq("id", project.id)
+        .select("*")
+        .maybeSingle();
+
+      if (upErr) throw upErr;
+      if (data) {
+        setProject(data as Project);
+      }
+    } catch (err: any) {
+      console.error("Save project header failed:", err);
+      setError(err?.message ?? String(err));
+    } finally {
+      setSavingProject(false);
+    }
+  }
+
+  // ---------- Totals ----------
+  const totals = useMemo(() => {
+    const subtotal = items.reduce(
+      (sum, it) => sum + (it.quantity ?? 0) * (it.unitCost ?? 0),
+      0
+    );
+
+    const markupPct =
+      settings?.useMarkupTiers && tiers.length > 0
+        ? (() => {
+            const tier = tiers.find(
+              (t) =>
+                subtotal >= t.minAmount &&
+                (t.maxAmount == null || subtotal < t.maxAmount)
+            );
+            return (tier?.percent ?? 0) / 100;
+          })()
+        : (estimate?.markupPct ?? 0) / 100;
+
+    const contingencyPct =
+      (estimate?.contingencyPct ?? settings?.defaultContingency ?? 0) / 100;
+
+    const afterMarkup = subtotal + subtotal * markupPct;
+    const afterContingency =
+      settings?.contingencyOrder === "BEFORE_MARKUP"
+        ? subtotal + subtotal * contingencyPct + subtotal * markupPct
+        : afterMarkup + afterMarkup * contingencyPct;
+
+    const mobilization =
+      (settings?.mobilizationPrice ?? 0) * (estimate?.mobilizationCount ?? 0);
+
+    const taxRate = (tax?.rate ?? 0) / 100;
+    const taxable =
+      tax?.taxMaterials ||
+      tax?.taxLabor ||
+      tax?.taxEquipment ||
+      tax?.taxMarkup ||
+      tax?.taxContingency
+        ? afterContingency
+        : 0;
+
+    const taxTotal = taxable * taxRate;
+    const grand = afterContingency + mobilization + taxTotal;
+
+    return {
+      subtotal,
+      markupPct: markupPct * 100,
+      contingencyPct: contingencyPct * 100,
+      afterContingency,
+      mobilization,
+      taxTotal,
+      grand,
+    };
+  }, [items, estimate, settings, tax, tiers]);
+
+  // ---------- Render ----------
+  return (
+    <div className="mx-auto max-w-5xl p-6">
+      {/* Build marker so we know this bundle is live */}
+      <div className="text-xs text-gray-500 mb-2">
+        Build marker: <strong>PROJECT-ESTIMATE-V9-LAYOUT</strong>
+      </div>
+
+      <header className="flex items-center justify-between mb-4">
+        <nav className="text-sm space-x-4">
+          <Link href="/" className="text-blue-600 hover:underline">
+            ← Home
+          </Link>
+          <Link href="/settings" className="text-blue-600 hover:underline">
+            Settings
+          </Link>
+        </nav>
+        <div className="text-lg font-semibold">Concrete Estimator</div>
+      </header>
+
+      {loading && <div>Loading…</div>}
+
+      {error && (
+        <div className="mb-4 rounded-md border border-red-200 bg-red-50 p-3 text-sm text-red-800">
+          {error}
+        </div>
+      )}
+
+      {!loading && !error && project && (
+        <div className="space-y-8">
+          {/* Project header / editable fields */}
+          <section className="rounded-lg border p-4 space-y-4">
+            <h1 className="text-xl font-bold mb-1">Project</h1>
+
+            <div className="space-y-3 max-w-xl">
+              <div className="flex flex-col gap-1">
+                <label className="text-sm font-medium">Project name</label>
+                <input
+                  className="border rounded px-2 py-1 text-sm"
+                  value={projectDraft.name}
+                  onChange={(e) =>
+                    setProjectDraft((d) => ({ ...d, name: e.target.value }))
+                  }
+                />
+              </div>
+
+              <div className="flex flex-col gap-1">
+                <label className="text-sm font-medium">Client name</label>
+                <input
+                  className="border rounded px-2 py-1 text-sm"
+                  value={projectDraft.clientName}
+                  onChange={(e) =>
+                    setProjectDraft((d) => ({
+                      ...d,
+                      clientName: e.target.value,
+                    }))
+                  }
+                />
+              </div>
+
+              <div className="flex flex-col gap-1">
+                <label className="text-sm font-medium">Location</label>
+                <input
+                  className="border rounded px-2 py-1 text-sm"
+                  value={projectDraft.location}
+                  onChange={(e) =>
+                    setProjectDraft((d) => ({
+                      ...d,
+                      location: e.target.value,
+                    }))
+                  }
+                />
+              </div>
+
+              <div className="flex flex-col gap-1">
+                <label className="text-sm font-medium">
+                  Project description
+                </label>
+                <textarea
+                  className="border rounded px-2 py-1 text-sm min-h-[80px]"
+                  placeholder="Scope notes, phasing, constraints, etc."
+                  value={projectDraft.description}
+                  onChange={(e) =>
+                    setProjectDraft((d) => ({
+                      ...d,
+                      description: e.target.value,
+                    }))
+                  }
+                />
+              </div>
+
+              <div className="text-xs text-gray-500 mt-1">
+                Project ID: <span className="font-mono">{project.id}</span>
+              </div>
+
+              <button
+                type="button"
+                onClick={handleSaveProjectHeader}
+                disabled={savingProject}
+                className="inline-flex items-center rounded bg-blue-600 px-3 py-1 text-sm font-medium text-white disabled:opacity-60"
+              >
+                {savingProject ? "Saving…" : "Save project"}
+              </button>
+            </div>
+          </section>
+
+          {/* Estimate summary */}
+          <section className="rounded-lg border p-4">
+            <h2 className="text-lg font-semibold mb-2">
+              {estimate ? estimate.title : "Base Bid"}
+            </h2>
+            {estimate ? (
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm">
+                <div>
+                  <div className="text-gray-500">Overhead %</div>
+                  <div>{estimate.overheadPct ?? 0}%</div>
+                </div>
+                <div>
+                  <div className="text-gray-500">Mobilization Count</div>
+                  <div>{estimate.mobilizationCount ?? 0}</div>
+                </div>
+                <div>
+                  <div className="text-gray-500">Overtime Hours / Day</div>
+                  <div>{estimate.overtimeHoursPerDay ?? 0}</div>
+                </div>
+                <div>
+                  <div className="text-gray-500">Created</div>
+                  <div>
+                    {estimate.createdat
+                      ? new Date(estimate.createdat).toLocaleString()
+                      : "—"}
+                  </div>
+                </div>
+              </div>
+            ) : (
+              <p className="text-sm text-gray-600">
+                Create an estimate to get started.
+              </p>
+            )}
+          </section>
+
+          {/* Line items with template picker */}
+          <section className="rounded-lg border p-4 space-y-3">
+            <div className="flex flex-col sm:flex-row sm:items-end sm:justify-between gap-3">
+              <h3 className="text-lg font-semibold">Line Items</h3>
+
+              <div className="flex flex-col sm:flex-row gap-2 sm:items-center">
+                <select
+                  className="border rounded px-2 py-1 text-sm min-w-[220px]"
+                  value={selectedTemplateId}
+                  onChange={(e) => setSelectedTemplateId(e.target.value)}
+                >
+                  {["SYSTEM", "MATERIAL", "LABOR"].map((group) => (
+                    <optgroup key={group} label={group}>
+                      {LINE_ITEM_TEMPLATES.filter(
+                        (t) => t.group === group
+                      ).map((tpl) => (
+                        <option key={tpl.id} value={tpl.id}>
+                          {tpl.label}
+                        </option>
+                      ))}
+                    </optgroup>
+                  ))}
+                </select>
+                <button
+                  type="button"
+                  onClick={handleAddFromTemplate}
+                  className="rounded bg-green-600 px-3 py-1 text-sm font-medium text-white disabled:opacity-60"
+                  disabled={!estimate}
+                >
+                  Add from template
+                </button>
+                <button
+                  type="button"
+                  onClick={handleAddBlankItem}
+                  className="rounded border px-3 py-1 text-sm"
+                  disabled={!estimate}
+                >
+                  Add blank line
+                </button>
+              </div>
+            </div>
+
+            {items.length === 0 ? (
+              <div className="text-sm text-gray-600">No items yet.</div>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="min-w-full text-sm">
+                  <thead>
+                    <tr className="text-left border-b">
+                      <th className="py-2 pr-3">#</th>
+                      <th className="py-2 pr-3">Kind</th>
+                      <th className="py-2 pr-3">Description</th>
+                      <th className="py-2 pr-3">Unit</th>
+                      <th className="py-2 pr-3">Qty</th>
+                      <th className="py-2 pr-3">Unit Cost</th>
+                      <th className="py-2 pr-3">Cost</th>
+                      <th className="py-2 pr-3">Flags</th>
+                      <th className="py-2 pr-3 text-right">Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {items.map((it, idx) => {
+                      const cost = (it.quantity ?? 0) * (it.unitCost ?? 0);
+                      return (
+                        <tr key={it.id} className="border-b last:border-0">
+                          <td className="py-2 pr-3">{it.rank ?? idx + 1}</td>
+                          <td className="py-2 pr-3">
+                            <input
+                              className="border rounded px-1 py-0.5 w-24"
+                              value={it.kind}
+                              onChange={(e) =>
+                                handleItemChange(idx, "kind", e.target.value)
+                              }
+                            />
+                          </td>
+                          <td className="py-2 pr-3">
+                            <input
+                              className="border rounded px-1 py-0.5 w-full"
+                              value={it.description}
+                              onChange={(e) =>
+                                handleItemChange(
+                                  idx,
+                                  "description",
+                                  e.target.value
+                                )
+                              }
+                            />
+                          </td>
+                          <td className="py-2 pr-3">
+                            <input
+                              className="border rounded px-1 py-0.5 w-16"
+                              value={it.unit}
+                              onChange={(e) =>
+                                handleItemChange(idx, "unit", e.target.value)
+                              }
+                            />
+                          </td>
+                          <td className="py-2 pr-3">
+                            <input
+                              type="number"
+                              className="border rounded px-1 py-0.5 w-20 text-right"
+                              value={it.quantity}
+                              onChange={(e) =>
+                                handleItemChange(
+                                  idx,
+                                  "quantity",
+                                  Number(e.target.value || 0)
+                                )
+                              }
+                            />
+                          </td>
+                          <td className="py-2 pr-3">
+                            <input
+                              type="number"
+                              step="0.01"
+                              className="border rounded px-1 py-0.5 w-24 text-right"
+                              value={it.unitCost}
+                              onChange={(e) =>
+                                handleItemChange(
+                                  idx,
+                                  "unitCost",
+                                  Number(e.target.value || 0)
+                                )
+                              }
+                            />
+                          </td>
+                          <td className="py-2 pr-3 font-medium">
+                            ${cost.toFixed(2)}
+                          </td>
+                          <td className="py-2 pr-3">
+                            <label className="mr-2 text-xs">
+                              <input
+                                type="checkbox"
+                                className="mr-1 align-middle"
+                                checked={!!it.isMaterial}
+                                onChange={(e) =>
+                                  handleItemChange(
+                                    idx,
+                                    "isMaterial",
+                                    e.target.checked
+                                  )
+                                }
+                              />
+                              Mat
+                            </label>
+                            <label className="mr-2 text-xs">
+                              <input
+                                type="checkbox"
+                                className="mr-1 align-middle"
+                                checked={!!it.isLabor}
+                                onChange={(e) =>
+                                  handleItemChange(
+                                    idx,
+                                    "isLabor",
+                                    e.target.checked
+                                  )
+                                }
+                              />
+                              Labor
+                            </label>
+                            <label className="text-xs">
+                              <input
+                                type="checkbox"
+                                className="mr-1 align-middle"
+                                checked={!!it.isEquipment}
+                                onChange={(e) =>
+                                  handleItemChange(
+                                    idx,
+                                    "isEquipment",
+                                    e.target.checked
+                                  )
+                                }
+                              />
+                              Equip
+                            </label>
+                          </td>
+                          <td className="py-2 pr-3 text-right">
+                            <button
+                              type="button"
+                              onClick={() => handleDeleteItem(it)}
+                              className="text-xs text-red-600 hover:underline"
+                            >
+                              Delete
+                            </button>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )}
+
+            <div className="pt-3 border-t flex justify-end">
+              <button
+                type="button"
+                onClick={handleSaveItems}
+                disabled={savingItems}
+                className="rounded bg-blue-600 px-3 py-1 text-sm font-medium text-white disabled:opacity-60"
+              >
+                {savingItems ? "Saving…" : "Save line items"}
+              </button>
+            </div>
+          </section>
+
+          {/* Totals */}
+          <section className="rounded-lg border p-4">
+            <h3 className="text-lg font-semibold mb-2">Totals (quick view)</h3>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm">
+              <div>
+                <div className="text-gray-500">Subtotal</div>
+                <div>${totals.subtotal.toFixed(2)}</div>
+              </div>
+              <div>
+                <div className="text-gray-500">Markup %</div>
+                <div>{totals.markupPct.toFixed(2)}%</div>
+              </div>
+              <div>
+                <div className="text-gray-500">Contingency %</div>
+                <div>{totals.contingencyPct.toFixed(2)}%</div>
+              </div>
+              <div>
+                <div className="text-gray-500">After Contingency</div>
+                <div>${totals.afterContingency.toFixed(2)}</div>
+              </div>
+              <div>
+                <div className="text-gray-500">Mobilization</div>
+                <div>${totals.mobilization.toFixed(2)}</div>
+              </div>
+              <div>
+                <div className="text-gray-500">Tax</div>
+                <div>${totals.taxTotal.toFixed(2)}</div>
+              </div>
+              <div className="sm:col-span-2 pt-1 border-t">
+                <div className="text-gray-500">Grand Total</div>
+                <div className="text-base font-semibold">
+                  ${totals.grand.toFixed(2)}
+                </div>
+              </div>
+            </div>
+          </section>
+
+          {/* Debug footer */}
+          <section className="rounded-lg border p-4 text-xs text-gray-500">
+            <div>
+              Org Settings: {settings ? "loaded" : "—"} • Tax Scope:{" "}
+              {tax ? "loaded" : "—"} • Tiers: {tiers.length}
+            </div>
+          </section>
+        </div>
+      )}
+    </div>
+  );
+}
