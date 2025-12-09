@@ -6,7 +6,7 @@ import { supabase } from "../../lib/supabaseClient";
 // lightweight shapes
 type Org = { id: string; name: string };
 
-// Tiny timeout helper just for auth so we don’t hang forever
+// Tiny timeout helper so we never hang forever
 async function withTimeout<T>(p: Promise<T>, ms = 15000): Promise<T> {
   return new Promise((resolve, reject) => {
     const id = setTimeout(
@@ -80,22 +80,21 @@ export default function Settings() {
   useEffect(() => {
     let mounted = true;
 
-    async function bootFromSession() {
+    async function bootFromAuth() {
       try {
         setLoading(true);
         setErrorText(null);
 
-        // Use getSession with a timeout so we never hang forever
+        // IMPORTANT: use getUser (same as Home) with timeout
         const { data, error } = await withTimeout(
-          supabase.auth.getSession(),
+          supabase.auth.getUser(),
           15000
         );
         if (!mounted) return;
         if (error) throw error;
 
-        const session = data.session;
-        const uid = session?.user?.id ?? null;
-        const email = session?.user?.email ?? null;
+        const uid = data.user?.id ?? null;
+        const email = data.user?.email ?? null;
 
         setUserId(uid);
         setUserEmail(email);
@@ -129,7 +128,7 @@ export default function Settings() {
       }
     );
 
-    bootFromSession();
+    bootFromAuth();
 
     return () => {
       mounted = false;
@@ -236,9 +235,9 @@ export default function Settings() {
     setDemoStatus(null);
     setDemoBusy(true);
     try {
-      const { data: me, error: meErr } = await supabase.auth.getSession();
+      const { data: me, error: meErr } = await supabase.auth.getUser();
       if (meErr) throw meErr;
-      const uid = me.session?.user?.id;
+      const uid = me.user?.id;
       if (!uid) throw new Error("No signed-in user.");
 
       setDemoStatus("Creating project…");
@@ -355,7 +354,7 @@ export default function Settings() {
   return (
     <main style={{ maxWidth: 960, margin: "0 auto", padding: "24px" }}>
       <p style={{ marginTop: 8, color: "#666" }}>
-        Build marker: <b>SETTINGS-V5-AUTH-TIMEOUT</b>
+        Build marker: <b>SETTINGS-V6-GETUSER</b>
       </p>
 
       <header
@@ -408,11 +407,17 @@ export default function Settings() {
               <strong>Seed via API:</strong> Creates/reuses Demo Org, Warehouse
               Expansion project, one estimate, and sample items (idempotent).
             </p>
-            <button className="button" disabled={apiBusy} onClick={seedDemoViaApi}>
+            <button
+              className="button"
+              disabled={apiBusy}
+              onClick={seedDemoViaApi}
+            >
               {apiBusy ? "Seeding…" : "Seed Demo (serverless)"}
             </button>
             {apiMsg && <p style={{ marginTop: 8, color: "green" }}>{apiMsg}</p>}
-            {apiErr && <p style={{ marginTop: 8, color: "crimson" }}>{apiErr}</p>}
+            {apiErr && (
+              <p style={{ marginTop: 8, color: "crimson" }}>{apiErr}</p>
+            )}
           </div>
 
           {/* Legacy direct insert */}
@@ -609,7 +614,10 @@ export default function Settings() {
                       type="checkbox"
                       checked={!!tax.taxLabor}
                       onChange={(e) =>
-                        setTax({ ...tax, taxLabor: e.target.checked })
+                        setTax({
+                          ...tax,
+                          taxLabor: e.target.checked,
+                        })
                       }
                     />{" "}
                     Labor
