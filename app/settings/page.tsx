@@ -6,6 +6,26 @@ import { supabase } from "../../lib/supabaseClient";
 // lightweight shapes
 type Org = { id: string; name: string };
 
+// Tiny timeout helper just for auth so we don’t hang forever
+async function withTimeout<T>(p: Promise<T>, ms = 15000): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const id = setTimeout(
+      () => reject(new Error("Request timed out while checking auth.")),
+      ms
+    );
+    p.then(
+      (val) => {
+        clearTimeout(id);
+        resolve(val);
+      },
+      (err) => {
+        clearTimeout(id);
+        reject(err);
+      }
+    );
+  });
+}
+
 export default function Settings() {
   const [loading, setLoading] = useState(true);
   const [errorText, setErrorText] = useState<string | null>(null);
@@ -40,7 +60,10 @@ export default function Settings() {
       },
     });
     if (error) alert(error.message);
-    else alert("Magic link sent. Check your email and come back here after clicking it.");
+    else
+      alert(
+        "Magic link sent. Check your email and come back here after clicking it."
+      );
   }
 
   async function signOutNow() {
@@ -62,8 +85,11 @@ export default function Settings() {
         setLoading(true);
         setErrorText(null);
 
-        // Use getSession instead of getUser (lighter, no custom timeout)
-        const { data, error } = await supabase.auth.getSession();
+        // Use getSession with a timeout so we never hang forever
+        const { data, error } = await withTimeout(
+          supabase.auth.getSession(),
+          15000
+        );
         if (!mounted) return;
         if (error) throw error;
 
@@ -87,7 +113,7 @@ export default function Settings() {
       }
     }
 
-    // Subscribe to future auth changes (magic link, sign out, etc.)
+    // Subscribe to auth changes (magic link, sign-out, etc.)
     const { data: sub } = supabase.auth.onAuthStateChange(
       async (_event, session) => {
         if (!mounted) return;
@@ -151,7 +177,7 @@ export default function Settings() {
       // Ensure defaults exist
       await ensureDefaults(orgId!);
 
-      // Load config (no custom timeout here)
+      // Load config
       const [
         { data: S, error: sErr },
         { data: T, error: tErr },
@@ -193,7 +219,8 @@ export default function Settings() {
         body: JSON.stringify({ userId }),
       });
       const json = await res.json();
-      if (!res.ok || !json?.ok) throw new Error(json?.error ?? "Failed to seed demo data");
+      if (!res.ok || !json?.ok)
+        throw new Error(json?.error ?? "Failed to seed demo data");
       setApiMsg(
         `Demo ready — org:${json.summary.org}, project:${json.summary.project}, estimate:${json.summary.estimate}, items:${json.summary.items}`
       );
@@ -293,7 +320,9 @@ export default function Settings() {
       setDemoStatus("✅ Demo project created! Go to Home to see it.");
     } catch (err: any) {
       console.error("Init demo data failed:", err);
-      setDemoStatus(`❌ Initialize Demo Data failed: ${err?.message || String(err)}`);
+      setDemoStatus(
+        `❌ Initialize Demo Data failed: ${err?.message || String(err)}`
+      );
     } finally {
       setDemoBusy(false);
     }
@@ -302,13 +331,19 @@ export default function Settings() {
   async function save() {
     try {
       if (!org || !settings || !tax) return;
-      await supabase.from("OrgSettings").upsert(settings, { onConflict: "orgId" });
+      await supabase
+        .from("OrgSettings")
+        .upsert(settings, { onConflict: "orgId" });
       await supabase
         .from("TaxScope")
         .upsert({ orgId: org.id, ...tax }, { onConflict: "orgId" });
 
       await supabase.from("MarkupTier").delete().eq('"orgId"', org.id);
-      const toInsert = tiers.map((t: any) => ({ ...t, id: undefined, orgId: org.id }));
+      const toInsert = tiers.map((t: any) => ({
+        ...t,
+        id: undefined,
+        orgId: org.id,
+      }));
       if (toInsert.length) await supabase.from("MarkupTier").insert(toInsert);
       alert("Saved!");
     } catch (e: any) {
@@ -320,7 +355,7 @@ export default function Settings() {
   return (
     <main style={{ maxWidth: 960, margin: "0 auto", padding: "24px" }}>
       <p style={{ marginTop: 8, color: "#666" }}>
-        Build marker: <b>SETTINGS-V4-NOAUTHGETUSER</b>
+        Build marker: <b>SETTINGS-V5-AUTH-TIMEOUT</b>
       </p>
 
       <header
@@ -436,7 +471,10 @@ export default function Settings() {
                   <textarea
                     value={settings.exclusionsText ?? ""}
                     onChange={(e) =>
-                      setSettings({ ...settings, exclusionsText: e.target.value })
+                      setSettings({
+                        ...settings,
+                        exclusionsText: e.target.value,
+                      })
                     }
                   />
                 </div>
@@ -480,7 +518,9 @@ export default function Settings() {
                     onChange={(e) =>
                       setSettings({
                         ...settings,
-                        defaultContingency: parseFloat(e.target.value || "0"),
+                        defaultContingency: parseFloat(
+                          e.target.value || "0"
+                        ),
                       })
                     }
                   />
@@ -490,7 +530,10 @@ export default function Settings() {
                   <select
                     value={settings.contingencyOrder}
                     onChange={(e) =>
-                      setSettings({ ...settings, contingencyOrder: e.target.value })
+                      setSettings({
+                        ...settings,
+                        contingencyOrder: e.target.value,
+                      })
                     }
                   >
                     <option value="AFTER_MARKUP">After markup</option>
@@ -505,7 +548,9 @@ export default function Settings() {
                     onChange={(e) =>
                       setSettings({
                         ...settings,
-                        mobilizationPrice: parseFloat(e.target.value || "0"),
+                        mobilizationPrice: parseFloat(
+                          e.target.value || "0"
+                        ),
                       })
                     }
                   />
@@ -518,14 +563,17 @@ export default function Settings() {
                     onChange={(e) =>
                       setSettings({
                         ...settings,
-                        crewHoursPerDay: parseInt(e.target.value || "8", 10),
+                        crewHoursPerDay: parseInt(
+                          e.target.value || "8",
+                          10
+                        ),
                       })
                     }
                   />
                 </div>
               </div>
 
-              <div className="card">
+              <div className="card" style={{ marginTop: 16 }}>
                 <h2 className="text-lg">Tax</h2>
                 <div className="field">
                   <label>Tax rate (%)</label>
@@ -533,7 +581,10 @@ export default function Settings() {
                     type="number"
                     value={tax.rate ?? 0}
                     onChange={(e) =>
-                      setTax({ ...tax, rate: parseFloat(e.target.value || "0") })
+                      setTax({
+                        ...tax,
+                        rate: parseFloat(e.target.value || "0"),
+                      })
                     }
                   />
                 </div>
@@ -543,7 +594,10 @@ export default function Settings() {
                       type="checkbox"
                       checked={!!tax.taxMaterials}
                       onChange={(e) =>
-                        setTax({ ...tax, taxMaterials: e.target.checked })
+                        setTax({
+                          ...tax,
+                          taxMaterials: e.target.checked,
+                        })
                       }
                     />{" "}
                     Materials
@@ -567,7 +621,10 @@ export default function Settings() {
                       type="checkbox"
                       checked={!!tax.taxEquipment}
                       onChange={(e) =>
-                        setTax({ ...tax, taxEquipment: e.target.checked })
+                        setTax({
+                          ...tax,
+                          taxEquipment: e.target.checked,
+                        })
                       }
                     />{" "}
                     Equipment
@@ -579,7 +636,10 @@ export default function Settings() {
                       type="checkbox"
                       checked={!!tax.taxMarkup}
                       onChange={(e) =>
-                        setTax({ ...tax, taxMarkup: e.target.checked })
+                        setTax({
+                          ...tax,
+                          taxMarkup: e.target.checked,
+                        })
                       }
                     />{" "}
                     Markup
@@ -591,7 +651,10 @@ export default function Settings() {
                       type="checkbox"
                       checked={!!tax.taxContingency}
                       onChange={(e) =>
-                        setTax({ ...tax, taxContingency: e.target.checked })
+                        setTax({
+                          ...tax,
+                          taxContingency: e.target.checked,
+                        })
                       }
                     />{" "}
                     Contingency
@@ -633,7 +696,9 @@ export default function Settings() {
                             onChange={(e) =>
                               updateTier(i, {
                                 ...t,
-                                minAmount: parseFloat(e.target.value || "0"),
+                                minAmount: parseFloat(
+                                  e.target.value || "0"
+                                ),
                               })
                             }
                           />
@@ -660,7 +725,9 @@ export default function Settings() {
                             onChange={(e) =>
                               updateTier(i, {
                                 ...t,
-                                percent: parseFloat(e.target.value || "0"),
+                                percent: parseFloat(
+                                  e.target.value || "0"
+                                ),
                               })
                             }
                           />
