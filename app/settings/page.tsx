@@ -6,26 +6,6 @@ import { supabase } from "../../lib/supabaseClient";
 // lightweight shapes
 type Org = { id: string; name: string };
 
-// Tiny timeout helper so we never hang forever
-async function withTimeout<T>(p: Promise<T>, ms = 15000): Promise<T> {
-  return new Promise((resolve, reject) => {
-    const id = setTimeout(
-      () => reject(new Error("Request timed out while checking auth.")),
-      ms
-    );
-    p.then(
-      (val) => {
-        clearTimeout(id);
-        resolve(val);
-      },
-      (err) => {
-        clearTimeout(id);
-        reject(err);
-      }
-    );
-  });
-}
-
 export default function Settings() {
   const [loading, setLoading] = useState(true);
   const [errorText, setErrorText] = useState<string | null>(null);
@@ -85,11 +65,8 @@ export default function Settings() {
         setLoading(true);
         setErrorText(null);
 
-        // IMPORTANT: use getUser (same as Home) with timeout
-        const { data, error } = await withTimeout(
-          supabase.auth.getUser(),
-          15000
-        );
+        // Same pattern as the working Home page: plain getUser
+        const { data, error } = await supabase.auth.getUser();
         if (!mounted) return;
         if (error) throw error;
 
@@ -112,7 +89,7 @@ export default function Settings() {
       }
     }
 
-    // Subscribe to auth changes (magic link, sign-out, etc.)
+    // subscribe to auth changes (magic link, sign-out, etc.)
     const { data: sub } = supabase.auth.onAuthStateChange(
       async (_event, session) => {
         if (!mounted) return;
@@ -176,7 +153,7 @@ export default function Settings() {
       // Ensure defaults exist
       await ensureDefaults(orgId!);
 
-      // Load config
+      // Load config pieces
       const [
         { data: S, error: sErr },
         { data: T, error: tErr },
@@ -353,8 +330,23 @@ export default function Settings() {
   // ---------- render ----------
   return (
     <main style={{ maxWidth: 960, margin: "0 auto", padding: "24px" }}>
+      <header
+        style={{
+          display: "flex",
+          gap: 16,
+          alignItems: "center",
+          marginBottom: 12,
+        }}
+      >
+        <a href="/">Home</a>
+        <a href="/settings">Settings</a>
+        <div style={{ marginLeft: "auto", fontWeight: 700 }}>
+          Concrete Estimator
+        </div>
+      </header>
+
       <p style={{ marginTop: 8, color: "#666" }}>
-        Build marker: <b>SETTINGS-V6-GETUSER</b>
+        Build marker: <b>SETTINGS-V7-GETUSER-NO-TIMEOUT</b>
       </p>
 
       <header
@@ -363,6 +355,7 @@ export default function Settings() {
           justifyContent: "space-between",
           alignItems: "center",
           marginBottom: 12,
+          marginTop: 12,
         }}
       >
         <h1 className="title">Settings</h1>
